@@ -1,6 +1,6 @@
 {
   "name": "divan",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Divan's agent skills, packaged as a Claude Code plugin.",
   "author": {
     "name": "Divan",
