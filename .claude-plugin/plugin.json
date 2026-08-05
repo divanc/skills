@@ -1,0 +1,18 @@
+{
+  "name": "divan",
+  "version": "0.1.0",
+  "description": "Divan's agent skills, packaged as a Claude Code plugin.",
+  "author": {
+    "name": "Divan",
+    "url": "https://github.com/divanc"
+  },
+  "homepage": "https://github.com/divanc/skills",
+  "repository": "https://github.com/divanc/skills",
+  "license": "MIT",
+  "keywords": [
+    "skills",
+    "engineering",
+    "claude-code"
+  ],
+  "skills": []
+}

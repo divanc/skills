@@ -1,0 +1,20 @@
+{
+  "name": "skills",
+  "owner": {
+    "name": "Divan",
+    "url": "https://github.com/divanc"
+  },
+  "description": "Divan's skills, as an installable Claude Code plugin.",
+  "plugins": [
+    {
+      "name": "divan",
+      "source": "./",
+      "description": "Divan's agent skills, packaged as a Claude Code plugin.",
+      "category": "engineering",
+      "keywords": [
+        "skills",
+        "engineering"
+      ]
+    }
+  ]
+}
