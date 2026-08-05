@@ -11,27 +11,18 @@ Add the marketplace, then install the plugin:
 /plugin install divan@skills
 ```
 
-Skills are then invoked namespaced, e.g. `/divan:devibe`.
+## Skills
 
-## Local development
+### worktrees
 
-Skills in this repo can be used directly without installing:
+One branch = one directory. Wrapper folder holds `main/` plus one worktree per branch, named after it.
+No stash juggling, no branch switching mid-session, and parallel agent sessions get separate checkouts instead of fighting over one.
 
-```bash
-ln -s "$PWD/skills/<name>" ~/.claude/skills/<name>
-```
+The skill teaches the agent the convention and its lifecycle:
 
-## Layout
-
-```
-.claude-plugin/
-  plugin.json       # plugin manifest, lists every shipped skill
-  marketplace.json  # makes this repo its own marketplace
-skills/
-  <name>/SKILL.md   # one directory per skill
-```
-
-Every new skill needs its path added to `skills` in `plugin.json`.
+- **Create** — worktree per branch; knows `.env` and deps need copying/installing.
+- **Prune** — removes dead worktrees and merged branches; asks before touching unmerged work.
+- **Migrate** — plain clone → this layout, three renames, no re-clone.
 
 ## License
 

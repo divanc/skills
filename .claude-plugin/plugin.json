@@ -14,5 +14,5 @@
     "engineering",
     "claude-code"
   ],
-  "skills": []
+  "skills": ["./skills/worktrees"]
 }
