@@ -13,6 +13,29 @@ Add the marketplace, then install the plugin:
 
 ## Skills
 
+### big-picture
+
+Toggle mode for design discussions and explanations.
+
+Agents approach design with complicated language and a lot of detail at
+once. That's exhausting to process and error-prone: it's easy to miss a
+detail in a 300-line reply, and the missed detail stays in context and
+poisons everything downstream. Volume also flips the roles — the agent
+drives, generating context, while the human is reduced to reviewing it.
+
+This skill inverts both. The agent starts at the coarsest decision level —
+why build this at all, what it covers — and descends one level per turn,
+only after you agree. Each settled decision prunes most of the wrong designs
+below it, so detail arrives only where it still matters. And the agent rides
+passenger: you feed context, it acts on it or asks corrections — it doesn't
+generate walls of it.
+
+- One decision or one question per turn, ≤10 lines.
+- Proposes itself on big layered questions; answers normally if you decline.
+- `/big-picture <thing>` also works as an explainer: big picture first, then
+  details of the part you pick.
+- Stays on until "stop big-picture" / "normal mode".
+
 ### worktrees
 
 Makes your repo look like this:

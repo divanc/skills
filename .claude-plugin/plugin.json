@@ -14,5 +14,8 @@
     "engineering",
     "claude-code"
   ],
-  "skills": ["./skills/worktrees"]
+  "skills": [
+    "./skills/worktrees",
+    "./skills/big-picture"
+  ]
 }
