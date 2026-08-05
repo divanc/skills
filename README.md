@@ -1,6 +1,6 @@
 # divan/skills
 
-My agent skills, packaged as a Claude Code plugin. Small, composable, hackable.
+Skills for humans.
 
 ## Install
 
@@ -12,6 +12,10 @@ Add the marketplace, then install the plugin:
 ```
 
 ## Skills
+
+- [big-picture](#big-picture) — design discussions one decision level at a time, ≤10 lines per turn
+- [unslop](#unslop) — strip agent-written docs of claims no human approved
+- [worktrees](#worktrees) — one branch = one directory; create, prune, migrate
 
 ### big-picture
 
@@ -36,6 +40,38 @@ generate walls of it.
   details of the part you pick.
 - Stays on until "stop big-picture" / "normal mode".
 
+### unslop
+
+Cleans agent-written docs of "poison" — context no human approved.
+
+Agents write reference docs (ADRs, plans, notes) and later read them back as
+truth. Along the way they smuggle in claims nobody decided: a "probably X"
+that hardened into "we use X", a timeout that was never chosen, a constraint
+the agent invented for itself. Those claims then steer future agent decisions
+in ways you didn't intend.
+
+Unslop scans docs in two passes:
+
+- **Auto-clean** — removes what's harmless to remove: hedges-turned-facts,
+  invented numbers, filler adjectives, prose restating code. Shown as a diff.
+- **Ask** — anything whose removal could delete a real decision gets one
+  question: keep, reword, cut, or skip. Your answer is the source: "we need
+  to support themes" turns "a light theme is wanted" into "Theme support is
+  planned." Kept claims are stamped `[approved @you <date>]` and never asked
+  again; skipped ones stay unmarked and resurface next run.
+
+Markers alone would be forgeable — agents mimic patterns they see — so the
+truth lives in a sidecar `.unslop` file: a hash of each approved claim,
+written only by the skill. A marker whose text doesn't hash-match the sidecar
+is treated as unapproved and re-reviewed; editing an approved claim
+invalidates it the same way.
+
+Stop anytime — unmarked text just resurfaces next run, so every session is
+resumable for free. A fully cleaned doc gets a header telling agents to treat
+it as trusted, backed by a whole-doc hash in the sidecar — edit the doc and
+it's flagged stale on the next run. Running on an already-clean target prints
+a status report instead: `4 clean, 1 stale, 2 never reviewed`.
+
 ### worktrees
 
 Makes your repo look like this:
@@ -47,13 +83,18 @@ myrepo/
   perf-web/      # git worktree, branch perf-web
 ```
 
-One branch = one directory; the outer folder is just a container. The agent understands the layout and works within it: never switches branches inside a worktree, creates a new sibling per task instead, keeps dir names matching branch names.
+One branch = one directory; the outer folder is just a container. The agent
+understands the layout and works within it: never switches branches inside a
+worktree, creates a new sibling per task instead, keeps dir names matching
+branch names.
 
 - **Create** — worktree per branch; knows `.env` and deps need copying/installing.
 - **Prune** — removes dead worktrees and merged branches; asks before touching unmerged work.
 - **Migrate** — plain clone → this layout, three renames, no re-clone.
 
-Why this beats a single checkout: no stash juggling or branch switching mid-work, every branch keeps its own build state, and parallel agent sessions get separate directories instead of clobbering one checkout.
+Why this beats a single checkout: no stash juggling or branch switching
+mid-work, every branch keeps its own build state, and parallel agent sessions
+get separate directories instead of clobbering one checkout.
 
 ## License
 

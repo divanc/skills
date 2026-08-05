@@ -16,6 +16,7 @@
   ],
   "skills": [
     "./skills/worktrees",
-    "./skills/big-picture"
+    "./skills/big-picture",
+    "./skills/unslop"
   ]
 }
