@@ -24,10 +24,16 @@ steer agent decisions. Unslop strips it, records what survives.
 
   ```json
   {
+    "skill_hash": "<sha256 of this SKILL.md at scan time>",
     "claims": {"<sha256 of whitespace-normalized claim text>": {"by": "@divan", "date": "2026-08-05", "file": "004-storage.md"}},
     "files": {"004-storage.md": {"hash": "<sha256 of doc>", "date": "2026-08-05"}}
   }
   ```
+
+- `skill_hash`: `shasum -a 256` of this skill's SKILL.md (path = skill base
+  dir). Detection rules changed → old clean verdicts unsafe. Mismatch →
+  every `files` entry stale (re-scan docs); `claims` stay valid — human
+  approval never expires with skill updates. Rewrite `skill_hash` after scan.
 
 - Verify pass before scanning: hash each marker's claim text, look up
   sidecar. No match → strip marker, treat as unapproved.
