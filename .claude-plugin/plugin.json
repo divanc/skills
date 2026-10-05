@@ -1,6 +1,6 @@
 {
   "name": "divan",
-  "version": "1.0.1",
+  "version": "2.0.0",
   "description": "Divan's agent skills, packaged as a Claude Code plugin.",
   "author": {
     "name": "Divan",
@@ -17,6 +17,6 @@
   "skills": [
     "./skills/worktrees",
     "./skills/big-picture",
-    "./skills/unslop"
+    "./skills/manage"
   ]
 }
