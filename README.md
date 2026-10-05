@@ -14,6 +14,7 @@ Add the marketplace, then install the plugin:
 ## Skills
 
 - [big-picture](#big-picture) — design discussions one decision level at a time, ≤10 lines per turn
+- [manage](#manage) — run an agreed plan as an orchestrator: subagents build, you verify
 - [unslop](#unslop) — strip agent-written docs of claims no human approved
 - [worktrees](#worktrees) — one branch = one directory; create, prune, migrate
 
@@ -39,6 +40,24 @@ generate walls of it.
 - `/big-picture <thing>` also works as an explainer: big picture first, then
   details of the part you pick.
 - Stays on until "stop big-picture" / "normal mode".
+
+### manage
+
+Runs work that is already understood and agreed, as an orchestrator.
+
+Left alone, an agent implements a plan itself: it sinks into the code, burns
+the context it needs later, and grades its own work. This skill keeps it above
+the work. Each phase goes to one subagent with a brief; the orchestrator reads
+the report as a claim, re-runs the checks itself, and commits only what it
+verified.
+
+- **Board** — phase list reprinted as phases land; survives context summaries.
+- **Briefs** — state, settled decisions, file ownership, scope, and git rules
+  that stop parallel agents clobbering a shared checkout.
+- **Verification** — every test watched failing, outcomes over exit codes,
+  your check wins over the agent's report.
+- **Audits** — mutation testing and adversarial QA before a release.
+- Phases end green: new code lands beside old, old is deleted in its own phase.
 
 ### unslop
 
