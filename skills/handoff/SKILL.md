@@ -52,13 +52,12 @@ Link the charter and briefs; don't copy them. The file is the state, not the his
 You launch it, in your workspace:
 
 ```
-superset agents create --local --workspace $SUPERSET_WORKSPACE_ID \
-  --agent <TODO(W1): how to start divan:manager> --prompt "<prompt>"
+superset terminals create --local --workspace $SUPERSET_WORKSPACE_ID --json \
+  --command "claude --dangerously-skip-permissions --agent divan:manager 'Load the handoff skill and take over from <handoff path>.'"
 ```
 
-Prompt: "You take over as manager of <work> from `<your session name>`. Load `handoff`; read <handoff path>
-in full, then the charter. Verify the live state before you act. Then SendMessage `<your session name>`:
-`TOOK OVER`."
+Same workspace, so it has your worktree and evidence folder. No quotes in the prompt; the file names you for
+`TOOK OVER`. The output's `terminalId` is what step 4's `agents wait` takes.
 
 Not `--from-terminal`: it seeds the session with the last 36k characters of your screen, mostly tool
 output, which is the context you are handing off to escape. The file is the state.
@@ -67,7 +66,8 @@ From launch, act on nothing. Two managers on one board give conflicting orders.
 
 ## 3. Take over (the new manager)
 
-The file is a claim written from a full context. Before acting, check each row against the world:
+Read the handoff file in full, then the charter. The file is a claim written from a full context. Before
+acting, check each row against the world:
 
 - `superset terminals list --workspace <id>` per task: the terminal is alive, the agent is where the file
   says.

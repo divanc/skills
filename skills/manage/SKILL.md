@@ -31,9 +31,12 @@ Never report to the user before you have the agent's result.
 Workers are Paradev sessions running `divan:worker`. The agent holds the limits; the brief holds the task:
 
 ```
-superset agents create --local --workspace <id> --agent <TODO(W1): how to start divan:worker> \
-  --prompt "<brief>"
+superset ws create --local --project <id> --name <name> --branch <branch> --json \
+  --command "claude --dangerously-skip-permissions --agent divan:worker 'Read your brief at <path> and do it.'"
 ```
+
+No quotes in the prompt; the brief file carries the rest. The output's `terminals[0].terminalId` is what
+`superset agents wait --terminal` and `superset terminals read` take.
 
 Reviewers and critics are your subagents: the `Agent` tool with `subagent_type` `divan:reviewer` or
 `divan:critic`.
@@ -59,7 +62,7 @@ minutes. Every brief ends with the report envelope below, so the worker's last a
 to you. That message is the signal.
 
 At launch, subscribe with `SendMessage(to: <worker session>, notify_when_idle: true)` and no message; the
-session is the new `ListAgents` row named after its workspace. To block on one worker, `superset agents
+session is the new `ListAgents` row named after its branch. To block on one worker, `superset agents
 wait --workspace <id> --terminal <id> --until settled`. Both are wake-ups, not proof of done: a worker
 running nested `claude -p` sessions settles on their stops. Woken without a DONE or BLOCKED, read its
 screen (`superset terminals read`). The notice is one-shot and arrives only after your turn ends;
