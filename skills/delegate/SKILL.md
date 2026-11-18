@@ -21,8 +21,7 @@ One screen. Link the long spec; don't paste it. Only you append to Changes, date
 
 ## 2. Brief the manager
 
-Write the brief to `<evidence folder>/briefs/manager.md` and start the manager as its own session, so its
-context is not yours:
+Write the brief to `<evidence folder>/briefs/manager.md` and start the manager as its own session:
 
 ```
 superset ws create --local --project <id> --name <name> --branch <branch> --json \
