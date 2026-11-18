@@ -154,8 +154,9 @@ Requirements:
 | reviewer | scores files with Codex, returns findings | change files; run Codex outside its read-only sandbox | tools; hook |
 | critic | judges what users see against the charter | edit, post, click, `curl` | tools (WebFetch, Slack read-only); hook: the browser only looks; screenshots only to the evidence folder or `$TMPDIR` |
 
-The hook also checks commands inside wrappers (`env`, `xargs`, `bash -c`, ...).
-The exact rules are in `hooks/limits.py`.
+The hook also checks commands inside wrappers (`env`, `xargs`, `bash -c`, ...),
+and blocks options it doesn't know on git, wrappers, shells and `curl`. The
+exact rules are in `hooks/limits.py`.
 
 No divan agent merges: `gh pr merge` is blocked for all four. Your own session
 isn't limited, even when it spawns divan subagents. Any other subagent a divan
@@ -165,13 +166,17 @@ reviewer or critic keeps its own.
 ### Gaps
 
 - The hook matches Bash as command text, so a command that writes through its
-  own syntax still gets past it: `sed`'s `w`, a test, a script.
+  own syntax still gets past it: `sed`'s `w`, a test, a script, or a command
+  fed in as data (`echo cmd | xargs sh -c '{}'`).
+- Git config can still redirect: repo or environment config
+  (`remote.<name>.push`, `GIT_CONFIG_PARAMETERS` exported earlier) a worker's
+  push; a repo's `diff.external` or `textconv` a reader's `git diff` or
+  `log -p`.
 - Nothing confines a worker to its brief's files.
 - Agents started by the Workflow tool are untested against these limits.
 - Agents run on the owner's GitHub credentials, so GitHub can't tell an agent
-  merge from yours: the hook is what stops it, and a `remote.<name>.push`
-  mapping can still redirect a named push. Require a PR and a review on `main`
-  and `deploy` so a push the hook misses still can't land.
+  merge from yours: the hook is what stops it. Require a PR and a review on
+  `main` and `deploy` so a push the hook misses still can't land.
 
 ## License
 
