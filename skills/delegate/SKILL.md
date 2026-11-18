@@ -53,7 +53,7 @@ Run `steer` on every manager message. `correct` and a small `improve` go back to
 proposed Changes entry go to the user: the decision, its options, your recommendation, in a few lines. Their
 answer goes into Changes, dated, and to the manager at once.
 
-The user hears from you at done and when their decision is needed, nowhere else. Asked for status, give the
+The user hears from you only at done and when their decision is needed. Asked for status, give the
 manager's board, not a retelling.
 
 ## 4. Accept
