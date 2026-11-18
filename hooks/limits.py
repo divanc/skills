@@ -220,12 +220,11 @@ def read_options(tool, w, table):
             take = 1 if eq else 1 + n
         elif a in table:
             take = 1 + table[a]
-        elif table.get(a[:2]) == 1:
-            take = 1  # attached value
-        elif all(f"{a[0]}{c}" in table for c in a[1:]) and all(table[f"{a[0]}{c}"] == 0 for c in a[1:-1]):
-            take = 1 + table[f"{a[0]}{a[-1]}"]
         else:
-            raise Blocked(f"`{tool} {a}` is an option the hook does not know")
+            letters, value_next = cluster(a, lambda c: table.get(a[0] + c) == 1)
+            if any(a[0] + c not in table for c in letters):
+                raise Blocked(f"`{tool} {a}` is an option the hook does not know")
+            take = 1 + value_next
         own, i = own + w[i:i + take], i + take
     return own, w[i:]
 
@@ -282,9 +281,29 @@ def git_commands():
     return frozenset(out.split())
 
 
-def short_flags(args):
-    """Single-letter flags in args, clusters split: `-Av` is A and v."""
-    return {c for a in args if re.match(r"^-[a-zA-Z]+$", a) for c in a[1:]}
+def cluster(a, takes_value):
+    """(letters, value is the next word) of a short-option cluster, read as git and getopt read it: letters until one
+    that takes a value, which takes the rest of the cluster (`-mfix`), or the next word when it is last (`-am`)."""
+    for j, c in enumerate(a[1:], 1):
+        if takes_value(c):
+            return a[1:j + 1], j == len(a) - 1
+    return a[1:], False
+
+
+def short_flags(args, values=""):
+    """Single-letter flags in args; `values` are the letters that take a value, so `-am'fix: a'` is a and m, and
+    `-mchange` is m alone."""
+    out, skip = set(), False
+    for a in args:
+        if skip or a == "--":
+            skip = False
+            if a == "--":
+                break
+            continue
+        if re.match(r"^-[a-zA-Z]", a):
+            letters, skip = cluster(a, lambda c: c in values)
+            out |= set(letters)
+    return out
 
 
 def option_values(w, short, long):
@@ -355,7 +374,7 @@ def reader(agent, w):
     if agent == "manager":
         if tool in WRITE:
             return f"`{tool}` writes files"
-        if tool == "sed" and ("i" in short_flags(w) or any(a.startswith(("-i", "--in-place")) for a in w)):
+        if tool == "sed" and ("i" in short_flags(w[1:], "efl") or any(a.startswith("--in-place") for a in w)):
             return "sed -i edits files"
     elif tool not in READ | EXTRA[agent] | WRAP.keys():
         return f"`{tool}` is not on the {agent}'s read-only list"
@@ -431,7 +450,7 @@ def worker_git(w):
             return "workers never push to main or deploy; push your branch"
         if len(pos) < 2 or any(re.match(r"^\+?(HEAD|@)$", x) for x in pos[1:]):  # the destination comes from config
             return "name the destination: `git push origin <branch>`"
-    short = short_flags(rest)
+    short = short_flags(rest, {"commit": "mFcCtSu", "checkout": "bB", "switch": "cC", "clean": "e"}.get(sub, ""))
     sweeps = (sub == "add" and ({"A", "u"} & short or {"--all", "--update"} & set(rest))
               or sub in ("add", "checkout", "restore") and SWEEP_PATHS & set(pos)
               or sub == "commit" and ("a" in short or "--all" in rest)
@@ -509,7 +528,7 @@ def bash(agent, cmd):
     for w in commands(cmd):
         if w[0].rsplit("/", 1)[-1] == "gh" and any(re.search(r"[$`]", x) for x in gh_words(strip_redirects(w))[:2]):
             return f"{agent}: name gh's command literally, not through a variable"
-    merges = re.search(r"pulls/\d+/merge", cmd) or any(  # parsed, and as tokens: gh, then pr, then merge
+    merges = re.search(r"pulls/\d+/merge|mergePullRequest|enablePullRequestAutoMerge", cmd) or any(  # parsed, and as tokens: gh, then pr, then merge
         w[0].rsplit("/", 1)[-1] == "gh" and gh_words(strip_redirects(w))[:2] == ["pr", "merge"] for w in commands(cmd)) or any(
         re.search(r"(^|\x00)(\S*/)?gh\x00(.*\x00)?pr\x00(.*\x00)?merge(\x00|$)", "\x00".join(w)) for w in segments(cmd))
     if merges:
@@ -726,6 +745,19 @@ def test():
     for c in ('superset browser screenshot --out "$TMPDIR/s.png"', "superset browser screenshot --out ${TMPDIR}/s.png"):
         assert not B("critic", c), c
     assert B("critic", "superset browser screenshot --out $HOME/s.png")
+    # Clusters read as git reads them; GraphQL merge mutations
+    for c in ("git commit -am'fix: bug'", "git commit -vam x", "git clean -dfx", "git checkout -fb x", "git add -vA"):
+        assert B("worker", c), c
+    for c in ("git commit -mchange", "git commit -m -a", "git commit -mafix", "git clean -e foo -n", "git checkout -bf",
+              "git switch -cf"):
+        assert not B("worker", c), c
+    assert B("manager", "sed -ni s/a/b/ f") and not B("manager", "sed -ei s/a/b/ f") and not B("manager", "sed -e -i f") and B("manager", "sed -i.bak s/a/b/ f")
+    for a in AGENTS:
+        for c in ("gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }'",
+                  "gh api graphql -F query='mutation{enablePullRequestAutoMerge(input:{pullRequestId:\"x\"}){clientMutationId}}'",
+                  "echo '{\"query\":\"mutation{mergePullRequest(input:{})}\"}' | gh api graphql --input -"):
+            assert B(a, c), (a, c)
+    assert not B("worker", "gh api graphql -f query='query { viewer { login } }'")
     here = os.getcwd()
     os.chdir(ev)  # relative paths would resolve inside the evidence folder; they block anyway
     for c in ("superset browser screenshot --out shot.png", "superset browser screenshot --out ./s.png",
