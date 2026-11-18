@@ -5,16 +5,37 @@ Bash rules read the command text, so a command that writes through its own synta
 The manager is on a denylist so it can run a repo's checks; the reviewer and the critic are on an allowlist.
 `python3 limits.py --test` runs the self-check.
 """
-import json, os, re, shlex, sys, tempfile
+import functools, json, os, re, shlex, subprocess, sys, tempfile
 
 READ = {"git", "gh", "ls", "cat", "head", "tail", "wc", "rg", "grep", "jq", "pwd", "echo", "printf", "date", "diff",
         "stat", "file", "tree", "sort", "uniq", "cut", "which", "true", "cd", "find", "test", "["}
 EXTRA = {"reviewer": {"codex"}, "critic": {"superset", "paradev"}}
 WRITE = {"rm", "rmdir", "mv", "cp", "touch", "tee", "mkdir", "ln", "chmod", "chown", "dd", "truncate", "install", "rsync"}
-WRAP = {  # wrapper: its options that take a value
-    "env": {"-u", "--unset", "-C", "--chdir"}, "nice": {"-n", "--adjustment"}, "nohup": set(), "command": set(),
-    "sudo": {"-u", "-g", "-C", "-p", "-U", "-r", "-t", "-D", "-h"}, "time": {"-o", "-f"}, "exec": {"-a"},
-    "xargs": {"-I", "-n", "-P", "-L", "-d", "-E", "-s", "-a"}}
+# Option tables: {option: number of values}. An option missing from its table blocks the command.
+WRAP = {
+    "env": {"-i": 0, "--ignore-environment": 0, "-u": 1, "--unset": 1, "-C": 1, "--chdir": 1, "-S": 1,
+            "--split-string": 1},
+    "sudo": {"-u": 1, "--user": 1, "-g": 1, "--group": 1, "-E": 0, "--preserve-env": 0, "-H": 0, "--set-home": 0,
+             "-n": 0, "--non-interactive": 0},
+    "xargs": {"-I": 1, "-n": 1, "--max-args": 1, "-P": 1, "--max-procs": 1, "-L": 1, "--max-lines": 1, "-d": 1,
+              "--delimiter": 1, "-0": 0, "--null": 0, "-r": 0, "--no-run-if-empty": 0, "-t": 0, "--verbose": 0},
+    "timeout": {"-s": 1, "--signal": 1, "-k": 1, "--kill-after": 1, "--preserve-status": 0, "--foreground": 0,
+                "-v": 0, "--verbose": 0},
+    "nice": {"-n": 1, "--adjustment": 1}, "nohup": {}, "command": {"-p": 0}, "time": {"-p": 0},
+    "exec": {"-a": 1, "-c": 0, "-l": 0}}
+SHELL = {"--norc": 0, "--noprofile": 0, "--login": 0, "--posix": 0, "--noediting": 0, "--restricted": 0,
+         "--verbose": 0, "--rcfile": 1, "--init-file": 1, "-o": 1, "+o": 1, "-O": 1, "+O": 1,
+         **{f"{s}{c}": 0 for s in "-+" for c in "abcefhiklmnprstuvxBCEHPT"}}
+GIT_GLOBAL = {"-C": 1, "-c": 1, "--no-pager": 0, "-P": 0}
+CURL = {"-s": 0, "--silent": 0, "-S": 0, "--show-error": 0, "-L": 0, "--location": 0, "-f": 0, "--fail": 0,
+        "-i": 0, "--include": 0, "-I": 0, "--head": 0, "-v": 0, "--verbose": 0, "-G": 0, "--get": 0,
+        "--compressed": 0, "-H": 1, "--header": 1, "-A": 1, "--user-agent": 1, "-m": 1, "--max-time": 1,
+        "--retry": 1, "-w": 1, "--write-out": 1, "--url": 1, "-e": 1, "--referer": 1}
+SHELLS = ("sh", "bash", "zsh", "dash", "ksh", "fish")
+RISKY_ENV = r"^(GIT_\w*|PAGER|EDITOR|VISUAL|BASH_ENV|ENV|PATH|LESSOPEN|LESSCLOSE|LD_\w+|DYLD_\w+)="  # change what runs
+SWEEP_PATHS = {".", ":/", ":", "*", ":/*"}  # pathspecs that take the whole tree
+RUNS_OR_WRITES = {"rg": ("--pre",), "sort": ("--compress-program",), "file": ("-C", "--compile"),
+                  "date": ("-s", "--set")}  # options of read tools that run a program or change state
 GIT_READ = {"status", "log", "diff", "show", "rev-parse", "ls-files", "grep", "blame", "describe", "shortlog",
             "cat-file", "ls-tree", "merge-base", "rev-list", "worktree", "branch", "remote", "stash"}
 GH_READ = {"view", "list", "diff", "checks", "status", "watch"}
@@ -32,6 +53,10 @@ SEP = {"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"}
 REDIR = set("<>&|")  # `>|` writes too
 OPS, STAND_IN = "<>|&;()", 0xE000  # shell operator characters; private-use offset for their quoted copies
 AGENTS = ("manager", "worker", "reviewer", "critic")
+
+
+class Blocked(Exception):
+    """Raised where the parser meets something it does not know; the command blocks with this reason."""
 SESSIONS = os.path.join(os.environ.get("TMPDIR", "/tmp"), "divan-limits")  # session_id -> its main thread's agent
 
 
@@ -84,10 +109,39 @@ def unprotect(t):
     return "".join(chr(ord(ch) - STAND_IN) if ord(ch) >= STAND_IN else ch for ch in t)
 
 
+def substitutions(cmd):
+    """Bodies of $(...) and `...` in cmd, skipping single-quoted text (literal there) and $((arithmetic))."""
+    out, q, i = [], None, 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if q != "'" and ch == "\\":
+            i += 2
+            continue
+        if q != "'" and cmd.startswith("$(", i) and not cmd.startswith("$((", i):
+            depth, j = 1, i + 2
+            while j < len(cmd) and depth:
+                depth += {"(": 1, ")": -1}.get(cmd[j], 0)
+                j += 1
+            out.append(cmd[i + 2:j - 1])
+            i = j
+            continue
+        if q != "'" and ch == "`":
+            j = cmd.find("`", i + 1) % (len(cmd) + 1)
+            out.append(cmd[i + 1:j])
+            i = j + 1
+            continue
+        if q is None and ch in "'\"":
+            q = ch
+        elif ch == q:
+            q = None
+        i += 1
+    return out
+
+
 def segments(cmd):
     """Simple commands in cmd as word lists; $(...) and `...` bodies count as commands too."""
-    out = []
-    for c in [cmd] + [a or b for a, b in re.findall(r"\$\(([^()]*)\)|`([^`]*)`", cmd)]:
+    out = [seg for body in substitutions(cmd) for seg in segments(body)]
+    for c in [cmd]:
         lex = shlex.shlex(protect(join_lines(c)), posix=True, punctuation_chars=True)
         lex.whitespace_split = True
         try:
@@ -107,22 +161,38 @@ def segments(cmd):
 def shell_command(w):
     """The command string of `sh|bash|zsh ... -c ... <cmd>`, read as bash reads argv: options (clusters, -o/-O and
     --rcfile/--init-file values) and a `--` come first, then the first operand is <cmd>. None without -c."""
-    c, i = False, 1
+    own, rest = read_options(w[0], w[1:], SHELL)
+    c = any(re.match(r"^-[a-zA-Z]*c", a) for a in own)
+    return rest[0] if c and rest else None
+
+
+def read_options(tool, w, table):
+    """Split w into (options, rest) by table {option: number of values}: rest starts at the first operand or after
+    `--`. Reads clusters of value-less flags (`-0r`) and attached values (`-n1`, `--max-args=1`); an option missing
+    from the table raises Blocked. A cluster ending in a value option (bash `-eo pipefail`) takes the next word."""
+    own, i = [], 0
     while i < len(w):
         a = w[i]
         if a == "--":
-            i += 1
+            return own + [a], w[i + 1:]
+        if not re.match(r"^[-+].", a) or a[0] == "+" and a not in table:
             break
-        if a in ("--rcfile", "--init-file"):
-            i += 2
-        elif re.match(r"^[-+][a-zA-Z]+$", a):
-            c = c or a[0] == "-" and "c" in a
-            i += 2 if a[-1] in "oO" else 1
-        elif a.startswith("--"):
-            i += 1
+        if a.startswith("--"):
+            name, eq, _ = a.partition("=")
+            n = table.get(name)
+            if n is None or eq and not n:
+                raise Blocked(f"`{tool} {a}` is an option the hook does not know")
+            take = 1 if eq else 1 + n
+        elif a in table:
+            take = 1 + table[a]
+        elif table.get(a[:2]) == 1:
+            take = 1  # attached value
+        elif all(f"{a[0]}{c}" in table for c in a[1:]) and all(table[f"{a[0]}{c}"] == 0 for c in a[1:-1]):
+            take = 1 + table[f"{a[0]}{a[-1]}"]
         else:
-            break
-    return w[i] if c and i < len(w) else None
+            raise Blocked(f"`{tool} {a}` is an option the hook does not know")
+        own, i = own + w[i:i + take], i + take
+    return own, w[i:]
 
 
 def commands(cmd):
@@ -131,25 +201,24 @@ def commands(cmd):
     for w in segments(cmd):
         while w:
             tool = w[0].rsplit("/", 1)[-1]
+            if re.match(RISKY_ENV, w[0]):
+                raise Blocked(f"`{w[0].split('=')[0]}=` changes what a command runs")
             if re.match(r"^\w+=", w[0]):
                 w = w[1:]
-            elif tool in ("sh", "bash", "zsh") and shell_command(w) is not None:
+            elif tool == "eval":
+                yield from commands(" ".join(w[1:]))
+                w = []
+            elif tool in SHELLS and shell_command(w) is not None:
                 yield from commands(shell_command(w))
                 w = []
             elif tool in WRAP:
-                own, w = w[:1], w[1:]
-                while w and (w[0].startswith("-") or re.match(r"^\w+=", w[0])):
-                    if w[0] == "--":
-                        w = w[1:]
-                        break
-                    split = (w[1:2] if w[0] in ("-S", "--split-string") else [w[0][2:]] if w[0].startswith("-S")
-                             else [w[0].split("=", 1)[1]] if w[0].startswith("--split-string=") else None)
-                    if tool == "env" and split:
-                        w = shlex.split(split[0]) + w[1 + (w[0] in ("-S", "--split-string")):]  # env -S '<cmd>' runs <cmd>
-                        break
-                    n = 2 if w[0] in WRAP[tool] else 1
-                    own, w = own + w[:n], w[n:]
-                yield own
+                own, w = read_options(tool, w[1:], WRAP[tool])
+                if tool == "timeout":
+                    own, w = own + w[:1], w[1:]  # the duration
+                split = option_values(own, "-S", "--split-string")
+                if split:
+                    w = shlex.split(split[0]) + w  # env -S '<cmd>' runs <cmd>
+                yield [tool] + own
             else:
                 yield w
                 w = []
@@ -167,14 +236,15 @@ def strip_redirects(w):
 
 
 def git_args(w):
-    """Words after `git`, skipping -C <path> and -c <k=v>; also returns the -C path."""
-    i, path = 1, None
-    while i < len(w) and w[i].startswith("-"):
-        if w[i] in ("-C", "-c"):
-            path = w[i + 1] if w[i] == "-C" and i + 1 < len(w) else path
-            i += 1
-        i += 1
-    return w[i:], path
+    """(global options, the rest) of a git command; a global option other than -C, -c, --no-pager, -P blocks."""
+    return read_options("git", w[1:], GIT_GLOBAL)
+
+
+@functools.lru_cache(maxsize=None)
+def git_commands():
+    """git's own and installed commands, aliases excluded."""
+    out = subprocess.run(["git", "--list-cmds=main,others"], capture_output=True, text=True).stdout
+    return frozenset(out.split())
 
 
 def short_flags(args):
@@ -187,6 +257,20 @@ def option_values(w, short, long):
     return ([w[i + 1] for i, a in enumerate(w[:-1]) if a in (short, long)]
             + [a[len(short):] for a in w if a.startswith(short) and len(a) > len(short) and not a.startswith("--")]
             + [a.split("=", 1)[1] for a in w if a.startswith(long + "=")])
+
+
+def gh_options_after_command(w, n):
+    """False if an option other than -R/--repo/--hostname comes before gh's first n words (its command)."""
+    i, seen = 1, 0
+    while i < len(w) and seen < n:
+        if w[i] in ("-R", "--repo", "--hostname"):
+            i += 2
+            continue
+        if w[i].startswith("-") and not w[i].startswith(("--repo=", "--hostname=")):
+            return False
+        seen += w[i][0] != "-"
+        i += 1
+    return True
 
 
 def gh_words(w):
@@ -230,9 +314,9 @@ def codex_read_only(w):
     return set(sandbox) == {"sandbox_mode=read-only"}
 
 
-def reader(agent, w, cwd="."):
+def reader(agent, w):
     """Why w writes, for the manager (denylist) and the reviewer and critic (allowlist)."""
-    tool, line = w[0].rsplit("/", 1)[-1], " ".join(w)
+    tool = w[0].rsplit("/", 1)[-1]
     if agent == "manager":
         if tool in WRITE:
             return f"`{tool}` writes files"
@@ -243,13 +327,17 @@ def reader(agent, w, cwd="."):
     if (any(a.startswith("--output") for a in w) or tool in ("sort", "tree", "time") and any(re.match(r"^-[a-zA-Z]*o", a) for a in w[1:])
             or tool == "uniq" and len([a for a in w[1:] if not a.startswith("-")]) > 1):
         return "an output file"
-    if tool == "find" and {"-delete", "-exec", "-execdir", "-ok", "-fprint", "-fprint0", "-fprintf", "-fls"} & set(w):
+    if any(a.startswith(o) for o in RUNS_OR_WRITES.get(tool, ()) for a in w[1:]):
+        return f"`{tool}` with an option that runs a program or changes state"
+    if tool == "find" and {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"} & set(w):
         return "find with -delete, -exec or -fprint"
     if tool == "git":
-        a, _ = git_args(w)
+        opts, a = git_args(w)
         sub, rest = (a or [""])[0], a[1:]
-        if any(o.startswith(("-c", "--config-env")) for o in w[1:len(w) - len(a)]):
+        if any(o.startswith("-c") for o in opts):
             return "`git -c` can make git run any program"
+        if sub == "grep" and any(r.startswith(("-O", "--open-files-in-pager")) for r in rest):
+            return "`git grep -O` runs a program"
         if (sub not in GIT_READ or sub == "worktree" and rest[:1] != ["list"]
                 or sub == "stash" and rest[:1] not in (["list"], ["show"])
                 or sub == "branch" and (any(f"-{c}" not in BRANCH_READ for c in short_flags(rest) - {"v"})
@@ -259,6 +347,8 @@ def reader(agent, w, cwd="."):
             return f"`git {sub}` writes; git is read-only here"
     if tool == "gh":
         noun, verb = (gh_words(w) + ["", ""])[:2]
+        if not gh_options_after_command(w, 1 if noun == "api" else 2):
+            return "`gh` with an option before its command that the hook does not know"
         if noun == "api":
             methods = option_values(w, "-X", "--method")
             if any(re.match(r"^(-[fF]|--(field|raw-field|input))", a) for a in w) or any(m.upper() != "GET" for m in methods):
@@ -271,35 +361,47 @@ def reader(agent, w, cwd="."):
     if tool in ("superset", "paradev") and agent == "critic" and (w[1:2] != ["browser"] or (w[2:3] or [""])[0] not in BROWSER_READ):
         return "the critic uses only `superset browser list|open|navigate|screenshot|console`"
     if tool in ("superset", "paradev") and agent == "critic" and not all(
-            evidence_or_tmp(os.path.join(cwd, os.path.expanduser(v))) for v in option_values(w, "--out", "--out")):
-        return "screenshots go into the evidence folder (next to charter.md) or $TMPDIR"
-    if tool == "curl" and (set("XdFTOo") & ({a[1] for a in w[1:] if re.match(r"^-[a-zA-Z]", a)} | short_flags(w[1:]))
-                           or any(re.match(r"^--(data|form|upload-file|output|request|json)", a) for a in w[1:])):
-        return "curl only reads: no method, body, upload or output file"
+            os.path.isabs(p) and evidence_or_tmp(p) for p in map(os.path.expanduser, option_values(w, "--out", "--out"))):
+        return "screenshots go to an absolute path in the evidence folder (next to charter.md) or $TMPDIR"
+    if tool == "curl":
+        rest = w[1:]
+        while rest:  # options and URLs interleave
+            _, rest = read_options("curl", rest, CURL)
+            rest = rest[1:]
     return None
 
 
 def worker(w):
-    """Why the worker may not run w: pushes to main/deploy and git commands that sweep files."""
-    if w[0].rsplit("/", 1)[-1] != "git":
-        return None
-    a, _ = git_args(w)
+    """Why the worker may not run w: pushes to main/deploy and git commands that sweep files. A `git` word anywhere
+    counts, so `timeout 60 git push ...` and `find -exec git push ...` are read too."""
+    return next(filter(None, (worker_git(w[i:]) for i, t in enumerate(w) if t.rsplit("/", 1)[-1] == "git")), None)
+
+
+def worker_git(w):
+    opts, a = git_args(w)
     sub, rest = (a or [""])[0], a[1:]
+    if sub and sub not in git_commands():
+        return f"`git {sub}` is not a git command (an alias?); run the command it stands for"
+    if sub == "push" and any(o.startswith("-c") for o in opts):
+        return "`git -c ... push` can change where the push goes"
     pos = [x for x in rest if not x.startswith("-")]
     if sub == "push":  # allowlist: git push [flags] <remote> <refspec>...
         bad = [x for x in rest if x.startswith("-") and x not in PUSH_FLAGS and not x.startswith("--force-with-lease=")
                and not re.match(r"^-[ufnqv]+$", x)]
         if bad:
             return f"`{bad[0]}` is not allowed; push as `git push [-u] [--force-with-lease] origin <branch>`"
+        if any(re.search(r"[$`]", x) for x in pos):
+            return "name the remote and branch literally, not through a variable"
         if any(x in (":", "+:") or "*" in x or re.search(r"(^|[:/+])(main|deploy)$", x) for x in pos[1:]):
             return "workers never push to main or deploy; push your branch"
         if len(pos) < 2 or any(re.match(r"^\+?(HEAD|@)$", x) for x in pos[1:]):  # the destination comes from config
             return "name the destination: `git push origin <branch>`"
     short = short_flags(rest)
-    sweeps = (sub == "add" and ("A" in short or "--all" in rest or "." in pos)
+    sweeps = (sub == "add" and ({"A", "u"} & short or {"--all", "--update"} & set(rest))
+              or sub in ("add", "checkout", "restore") and SWEEP_PATHS & set(pos)
               or sub == "commit" and ("a" in short or "--all" in rest)
               or sub == "stash" and rest[:1] not in (["list"], ["show"])
-              or sub in ("checkout", "restore") and "." in pos
+              or sub in ("checkout", "switch") and ("f" in short or {"--force", "--discard-changes"} & set(rest))
               or sub == "restore" and not pos
               or sub == "reset" and "--hard" in rest
               or sub == "clean" and ("f" in short or "--force" in rest))
@@ -356,7 +458,16 @@ def check(event):
         return "the manager writes only briefs: files in <evidence folder>/briefs/, next to charter.md"
     if tool != "Bash":
         return None
-    cmd = inp.get("command", "")
+    try:
+        return bash(agent, inp.get("command", ""))
+    except Blocked as e:
+        return f"{agent}: {e}"
+
+
+def bash(agent, cmd):
+    for w in commands(cmd):
+        if w[0].rsplit("/", 1)[-1] == "gh" and any(re.search(r"[$`]", x) for x in gh_words(strip_redirects(w))[:2]):
+            return f"{agent}: name gh's command literally, not through a variable"
     merges = re.search(r"pulls/\d+/merge", cmd) or any(  # parsed, and as tokens: gh, then pr, then merge
         w[0].rsplit("/", 1)[-1] == "gh" and gh_words(strip_redirects(w))[:2] == ["pr", "merge"] for w in commands(cmd)) or any(
         re.search(r"(^|\x00)(\S*/)?gh\x00(.*\x00)?pr\x00(.*\x00)?merge(\x00|$)", "\x00".join(w)) for w in segments(cmd))
@@ -368,7 +479,7 @@ def check(event):
         if agent == "worker":
             why = worker(strip_redirects(w))
         else:
-            why = "output redirect to a file" if redirects_to_file(w) else reader(agent, strip_redirects(w), event.get("cwd", "."))
+            why = "output redirect to a file" if redirects_to_file(w) else reader(agent, strip_redirects(w))
         if why:
             return f"{agent}: {why}"
     return None
@@ -466,7 +577,7 @@ def test():
     for c in ("git push origin :", "git push origin +:", "git push origin 'refs/heads/*:refs/heads/*'",
               "git push origin refs/heads/main", "git push origin HEAD:refs/heads/deploy", "git push origin 'feat*'"):
         assert B("worker", c), c
-    assert not B("worker", "git push origin feat:refs/heads/feat") and not B("worker", "time -o t.log git status")
+    assert not B("worker", "git push origin feat:refs/heads/feat") and not B("worker", "time -p git status") and B("worker", "time -o t.log git status")
     for c in ("env --split-string='git push origin HEAD:main'", "env -S'git push origin main'"):
         assert B("worker", c), c
     assert B("critic", "env --split-string='superset browser eval --expression x'") and B("manager", "env -S'rm x'")
@@ -528,6 +639,47 @@ def test():
               f"superset browser screenshot --out {ev}/../s.png", "superset browser screenshot --out ~/s.png"):
         assert B("critic", c), c
     os.environ["TMPDIR"] = tmpdir or ""
+    # Unknown options block: git globals, wrappers, shells, curl, gh before its command
+    for c in ("git --git-dir .git push origin main", "git --work-tree=. push origin main", "git -c remote.origin.push=x push origin feat",
+              "git -c alias.p=push p origin main", "git frobnicate", "timeout 60 git push origin main",
+              "find . -exec git push origin main ';'", "xargs --arg-file f git push origin main",
+              "sudo --user root git push origin main", "sudo --chroot=/ git status", "env --ignore-environment git push origin main"):
+        assert B("worker", c), c
+    for c in ("git -c user.name=x commit -m y", "git -C /r --no-pager -P log", "timeout -s KILL 5 git status"):
+        assert not B("worker", c), c
+    for a in ("manager", "reviewer", "critic"):
+        for c in ("git --git-dir .git log", "git --exec-path=/x log", "nice -10 ls", "xargs -0r --arg-file f ls",
+                  "bash --debugger -c 'ls'", "gh pr --body-file view create 1", "git grep -Ovim x", "rg --pre ./x y",
+                  "sort --compress-program=sh f", "file -C -m m", "date -s 1", "command -v git"):
+            assert B(a, c), (a, c)
+        for c in ("git -C /r --no-pager -P log", "gh --repo o/r pr view 1 --comments", "gh api -X GET repos/o/r",
+                  "timeout 5 ls", "xargs -0r ls", "echo '`rm x`'", "printf %s '$(touch x)'"):
+            assert not B(a, c), (a, c)
+        assert B(a, 'printf %s "$(touch x)"') and B(a, "echo \\'$(touch x)\\'"), a
+    for c in ("timeout -s KILL 5 rm x", "xargs -0r rm", "curl -D h.txt https://x", "curl -c jar https://x",
+              "curl --trace t https://x", "curl -sSLo f https://x"):
+        assert B("manager", c), c
+    for c in ("curl -sSL https://x", "curl -H 'A: b' https://x -w '%{http_code}'", "echo $((1+2))"):
+        assert not B("manager", c), c
+    # Hunted: eval, other shells, risky env assignments, variables in commands, sweeping pathspecs, find -okdir
+    for c in ("eval 'git push origin main'", "fish -c 'git push origin main'", "dash -c 'gh pr merge 1'",
+              "GIT_CONFIG_PARAMETERS=\"'remote.origin.push=refs/heads/x:refs/heads/main'\" git push origin x",
+              "git push origin $BRANCH", "git push origin \"$(git branch --show-current)\"", "gh $CMD 1",
+              "git add -u", "git add :/", "git checkout -- '*'", "git checkout -f main", "git switch --discard-changes x"):
+        assert B("worker", c), c
+    for c in ("LC_ALL=C git status", "gh pr view $N", "git add -p a.py", "git switch -c feat"):
+        assert not B("worker", c), c
+    for a in ("manager", "reviewer", "critic"):
+        for c in ("GIT_PAGER='touch x' git log", "PAGER=x git log", "eval 'rm x'", "find . -okdir rm {} ';'",
+                  "BASH_ENV=x.sh bash -c 'ls'", "gh $X 1"):
+            assert B(a, c), (a, c)
+        assert not B(a, "LC_ALL=C sort f"), a
+    here = os.getcwd()
+    os.chdir(ev)  # relative paths would resolve inside the evidence folder; they block anyway
+    for c in ("superset browser screenshot --out shot.png", "superset browser screenshot --out ./s.png",
+              "superset browser screenshot --out=s.png"):
+        assert B("critic", c), c
+    os.chdir(here)
     tmp.cleanup()
     print("ok")
 
