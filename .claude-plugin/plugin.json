@@ -17,6 +17,8 @@
   "skills": [
     "./skills/worktrees",
     "./skills/big-picture",
-    "./skills/manage"
+    "./skills/manage",
+    "./skills/delegate",
+    "./skills/steer"
   ]
 }
