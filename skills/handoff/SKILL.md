@@ -23,6 +23,7 @@ workspace <id>. Read first: <charter path>, <issue or spec>.
 
 ## Open tasks
 | task | state | branch | workspace | terminal (session name) |
+|---|---|---|---|---|
 
 ## Rules in force
 - <rule>: <its number and reason>.
@@ -41,7 +42,6 @@ Kept alive: <ids, why>. Closed: <ids>. Not mine, leave alone: <ids, whose>.
   progress".
 - **Each rule carries its number and reason**: "at most 4 runs an hour: a shared budget; stop at the first
   429". The reason lets the new manager apply it to a case you never met.
-- **"Not mine, leave alone"** stops the new manager closing a terminal it doesn't recognise.
 
 Link the charter and briefs; don't copy them. The file is the state, not the history.
 

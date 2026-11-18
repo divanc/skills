@@ -142,12 +142,13 @@ divan:<name>`); the reviewer and critic are the manager's subagents.
 Requirements:
 
 - Paradev, for the `superset` CLI that launches and watches sessions.
-- Claude Code 2.1.295 or later, and `python3`, for the hook. The hook fails
+- Claude Code 2.1.295 or later, and `python3` 3.9 or later, for the hook. The hook fails
   closed: without `python3`, Bash and Write are blocked in every session that
   loads the plugin.
-- Codex CLI, for the reviewer.
-- Owner and manager sessions in the same permission mode; otherwise
-  cross-session messages wait for approval.
+- Codex CLI 0.169 or later (`codex exec`, `codex review`), for the reviewer.
+- Owner and manager in the same permission-mode class, with inbound messages
+  allowed; otherwise Claude Code holds or refuses their messages. Check the
+  delivery notice.
 
 | agent | does | can't | enforced by |
 |---|---|---|---|
@@ -156,7 +157,8 @@ Requirements:
 | reviewer | scores files with Codex, returns findings | change files; run Codex outside its read-only sandbox | tools; hook: Bash reads only, Codex only as `exec -s read-only` or `review -c sandbox_mode="read-only"` |
 | critic | judges what users see against the charter | edit, post, click; `curl` | tools (WebFetch, Slack read-only); hook: Bash reads only, `superset browser` only `list`, `open`, `navigate`, `screenshot`, `console` |
 
-No agent merges: `gh pr merge` is blocked for all four.
+No divan agent merges: `gh pr merge` is blocked for all four. Your own session
+isn't limited.
 
 ### Gaps
 

@@ -59,7 +59,7 @@ is copied from it; writing that line from memory means you skipped step 5. Past 
 ## Finish signals
 
 A done you don't see costs the worker's idle time and yours. Every brief ends with the report envelope
-below, so the worker's last action is a `SendMessage` to you. That message is the signal.
+below, so the worker's last action, a `SendMessage` to you, is the signal.
 
 At launch, subscribe with `SendMessage(to: <task>, notify_when_idle: true)` and no message. To block on
 one worker, `superset agents wait --local --workspace <id> --terminal <id> --until settled`. Both are
@@ -110,7 +110,8 @@ how you start implementing again.
 ## Adapting the plan
 
 Announce every plan change in one line — a phase split, a gap-closing phase, a phase pulled
-forward. The user holds the old plan until you do.
+forward. The user holds the old plan until you do. Under a charter, announce it on the board; one that
+changes scope or a Done-when box goes to the owner as a proposed Changes entry.
 
 **Sending a phase back.** One detail wrong, or a rule changed: message the running agent; it keeps
 its context. Frame misunderstood, or the phase is really two: kill it and write a fresh brief.
