@@ -483,7 +483,8 @@ def reader(agent, w):
     if agent == "manager":
         if tool in WRITE:
             return f"`{tool}` writes files"
-        if tool == "sed" and ("i" in short_flags(w[1:], "efl") or any(a.startswith("--in-place") for a in w)):
+        if tool == "sed" and ("i" in short_flags(w[1:], "efl", ("--expression", "--file", "--line-length"))
+                              or long_opt(w[1:], "--in-place")):
             return "sed -i edits files"
     elif tool not in READ | EXTRA[agent] | WRAP.keys():
         return f"`{tool}` is not on the {agent}'s read-only list"
@@ -512,8 +513,6 @@ def reader(agent, w):
             return f"`git {sub}` writes; git is read-only here"
     if tool == "gh":
         noun, verb = (gh_words(w) + ["", ""])[:2]
-        if not gh_options_after_command(w, 1 if noun == "api" else 2):
-            return "`gh` with an option before its command that the hook does not know"
         if noun == "api":
             methods = option_values(w, "-X", "--method")
             if any(re.match(r"^(-[fF]|--(field|raw-field|input))", a) for a in w) or any(m.upper() != "GET" for m in methods):
@@ -658,12 +657,13 @@ def merge_call(w, cmd):
 
 
 def bash(agent, cmd):
-    for w in commands(cmd):
-        if w[0].rsplit("/", 1)[-1] == "gh" and any(re.search(r"[$`]", x) for x in gh_words(strip_redirects(w))[:2]):
-            return f"{agent}: name gh's command literally, not through a variable"
-    merges = any(merge_call(strip_redirects(w), cmd) for w in commands(cmd)) or any(  # parsed, and as tokens: gh, pr, merge
-        re.search(r"(^|\x00)(\S*/)?gh\x00(.*\x00)?pr\x00(.*\x00)?merge(\x00|$)", "\x00".join(w)) for w in segments(cmd))
-    if merges:
+    for w in map(strip_redirects, commands(cmd)):
+        if w and w[0].rsplit("/", 1)[-1] == "gh":  # gh in executable position: its command words must be plain
+            if any(re.search(r"[$`]", x) for x in gh_words(w)[:2]):
+                return f"{agent}: name gh's command literally, not through a variable"
+            if not gh_options_after_command(w, 1 if gh_words(w)[:1] == ["api"] else 2):
+                return f"{agent}: `gh` with an option before its command that the hook does not know"
+    if any(merge_call(strip_redirects(w), cmd) for w in commands(cmd)):
         return "merging is divan's; no agent merges"
     if agent != "worker" and any(redirects_to_file(w) for w in segments(cmd)):  # before wrappers are peeled
         return f"{agent}: output redirect to a file"
@@ -946,6 +946,16 @@ def test():
     for c in ("gh api repos/o/r/pulls/1/merge -X PUT", "gh api -XPUT repos/o/r/pulls/1/merge", "gh api repos/o/r/pulls/1/merge -f m=s",
               "curl -X PUT https://api.github.com/repos/o/r/pulls/1/merge"):
         assert B("worker", c), c
+    # sed --in-place abbreviated; merges only from gh in executable position
+    for c in ("sed --in-plac s/a/b/ f", "sed --in s/a/b/ f", "sed --in-place=.bak s/a/b/ f"):
+        assert B("manager", c), c
+    assert not B("manager", "sed --expression -i f") and not B("manager", "sed -n --expr s/a/b/p f")
+    for a in AGENTS:
+        for c in ("echo gh pr merge 1", "rg gh README.md --glob pr --glob merge"):
+            assert not B(a, c), (a, c)
+        assert a != "worker" or not B(a, "git commit -m 'run gh pr merge later'")
+        for c in ("gh --unknown x pr merge 1", "gh pr --body-file x merge 1", "env gh pr merge 1", "if true; then gh pr merge 1; fi"):
+            assert B(a, c), (a, c)
     here = os.getcwd()
     os.chdir(ev)  # relative paths would resolve inside the evidence folder; they block anyway
     for c in ("superset browser screenshot --out shot.png", "superset browser screenshot --out ./s.png",
