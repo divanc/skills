@@ -58,9 +58,8 @@ manager's board, not a retelling.
 
 ## 4. Accept
 
-The manager's DONE is a claim. Run `steer` on it, then take each Done-when box and open its evidence yourself:
-re-run the command, look at the screenshot, read the PR's checks. A box whose evidence you have not seen stays
-open and goes back to the manager.
+Open each Done-when box's evidence yourself: re-run the command, look at the screenshot, read the PR's checks. A box
+whose evidence you have not seen stays open and goes back to the manager.
 
 Done is:
 
