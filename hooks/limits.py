@@ -59,7 +59,8 @@ PUSH_FLAGS = {"-u", "--set-upstream", "-f", "--force", "--force-with-lease", "--
 BROWSER_READ = {"list", "open", "navigate", "screenshot", "console"}
 SEP = {"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"}
 REDIR = set("<>&|")  # `>|` writes too
-OPS, STAND_IN = "<>|&;()", 0xE000  # shell operator characters; private-use offset for their quoted copies
+OPS, BRACES, STAND_IN = "<>|&;()", "{}", 0xE000  # shell operators, braces; private-use offset for quoted copies
+GLOB = r"[*?\[\]{}]"  # expanded by the shell when unquoted, or a pattern to git
 FIND_END = {";", "+", chr(STAND_IN + ord(";"))}  # ends a find -exec command (`\;` and `';'` stay stand-ins)
 AGENTS = ("manager", "worker", "reviewer", "critic")
 
@@ -156,14 +157,14 @@ def protect(cmd):
         ch = cmd[i]
         if q != "'" and ch == "\\" and i + 1 < len(cmd):
             nxt = cmd[i + 1]
-            out.append(ch + (chr(STAND_IN + ord(nxt)) if nxt in OPS else nxt))
+            out.append(ch + (chr(STAND_IN + ord(nxt)) if nxt in OPS + BRACES else nxt))
             i += 2
             continue
         if q is None and ch in "'\"":
             q = ch
         elif ch == q:
             q = None
-        elif q and ch in OPS:
+        elif q and ch in OPS + BRACES:
             ch = chr(STAND_IN + ord(ch))
         elif not q and ch == "\n":  # an unquoted newline ends a command
             ch = " ; "
@@ -173,9 +174,16 @@ def protect(cmd):
 
 
 def unprotect(t):
-    """Stand-ins back to their characters, except in a token made only of them: a quoted operator stays a word."""
+    """Stand-ins back to their characters, except in a token made only of them (a quoted operator stays a word) and
+    for braces, which stay stand-ins so a quoted `{` is told from one the shell expands."""
     if t and all(ord(ch) >= STAND_IN for ch in t):
         return t
+    return "".join(chr(ord(ch) - STAND_IN) if ord(ch) >= STAND_IN and chr(ord(ch) - STAND_IN) not in BRACES else ch
+                   for ch in t)
+
+
+def unbrace(t):
+    """t with brace stand-ins back to braces, for a string the shell parses again (`bash -c`, `eval`, `env -S`)."""
     return "".join(chr(ord(ch) - STAND_IN) if ord(ch) >= STAND_IN else ch for ch in t)
 
 
@@ -334,10 +342,10 @@ def peel(w):
         if re.match(r"^\w+=", w[0]):
             w = w[1:]
         elif tool == "eval":
-            yield from commands(" ".join(w[1:]))
+            yield from commands(unbrace(" ".join(w[1:])))
             w = []
         elif tool in SHELLS and shell_command(w) is not None:
-            yield from commands(shell_command(w))
+            yield from commands(unbrace(shell_command(w)))
             w = []
         elif tool == "find":
             yield w
@@ -352,7 +360,7 @@ def peel(w):
                 own, w = own + w[:1], w[1:]  # the duration
             split = option_values(own, "-S", "--split-string")
             if split:
-                w = shlex.split(split[0]) + w  # env -S '<cmd>' runs <cmd>
+                w = shlex.split(unbrace(split[0])) + w  # env -S '<cmd>' runs <cmd>
             yield [tool] + own
         else:
             yield w
@@ -422,7 +430,6 @@ def split_args(args, values="", long_values=()):
 
 
 def short_flags(args, values="", long_values=()):
-    """The short flags of args (see split_args)."""
     return split_args(args, values, long_values)[0]
 
 
@@ -567,13 +574,15 @@ def worker_git(w):
             return f"`{bad[0]}` is not allowed; push as `git push [-u] [--force-with-lease] origin <branch>`"
         if any(re.search(r"[$`]", x) for x in pos):
             return "name the remote and branch literally, not through a variable"
-        if any(x in (":", "+:") or "*" in x or re.search(r"(^|[:/+])(main|deploy)$", x) for x in pos[1:]):
+        if any(re.search(GLOB, x) for x in pos):
+            return "a push remote or refspec with `*?[]` or an unquoted `{}`; name the branch literally"
+        if any(x in (":", "+:") or re.search(r"(^|[:/+])(main|deploy)$", x) for x in pos[1:]):
             return "workers never push to main or deploy; push your branch"
         if len(pos) < 2 or any(re.match(r"^\+?(HEAD|@)$", x) for x in pos[1:]):  # the destination comes from config
             return "name the destination: `git push origin <branch>`"
     short, longs, pos = split_args(rest, SHORT_VALUES.get(sub, ""), LONG_VALUES.get(sub, ()))
     sweeps = (sub == "add" and ({"A", "u"} & short or long_opt(longs, "--all", "--update"))
-              or sub in ("add", "checkout", "restore") and SWEEP_PATHS & set(pos)
+              or sub in ("add", "checkout", "restore", "commit") and (SWEEP_PATHS & set(pos) or any(re.search(GLOB, x) for x in pos))
               or sub == "commit" and ("a" in short or long_opt(longs, "--all"))
               or sub == "stash" and rest[:1] not in (["list"], ["show"])
               or sub in ("checkout", "switch") and ("f" in short or long_opt(longs, "--force", "--discard-changes"))
@@ -978,6 +987,15 @@ def test():
     assert not E("s9", "general-purpose", "a9", "gh pr merge 1")  # a bare `worker` main thread recorded nothing
     assert not B("reviewer", "codex exec -s read-only - <<'EOF'\nReview a.md, changed since main (git diff main), "
                              "against this bar: the charter's Great.\nReturn, per file: \"<file>  score: N/10\".\nEOF")
+    # Glob and brace expansion in push operands and sweep pathspecs; quoted braces are literal
+    for c in ("git push origin HEAD:{main,feature}", "git push origin [m]ain", "git push origin 'ma?n'", "git push {origin,x} f",
+              "git add {.,a.py}", "git add 'src/*.py'", "git add a?.py", "git checkout -- '[a]'", "git commit .", "git commit -- *",
+              "bash -c 'git push origin HEAD:{main,x}'", "eval 'git add {.,a}'"):
+        assert B("worker", c), c
+    for c in ("git push origin 'HEAD:{x}'", "git add 'a{b}.py'", "git add \\{a\\}.py", "git commit -m '{wip}' a.py",
+              "git push origin feat-1"):
+        assert not B("worker", c), c
+    assert not B("manager", "jq '{a: .b}' f") and not B("manager", "{ ls; }") and B("manager", "{ rm x; }")
     here = os.getcwd()
     os.chdir(ev)  # relative paths would resolve inside the evidence folder; they block anyway
     for c in ("superset browser screenshot --out shot.png", "superset browser screenshot --out ./s.png",
