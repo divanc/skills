@@ -25,6 +25,8 @@ BRANCH_PATTERN = {"--list", "--contains", "--merged", "--no-merged"}  # options 
 BROWSER_READ = {"list", "open", "navigate", "screenshot", "console"}
 SEP = {"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"}
 REDIR = set("<>&|")  # `>|` writes too
+AGENTS = ("manager", "worker", "reviewer", "critic")
+SESSIONS = os.path.join(os.environ.get("TMPDIR", "/tmp"), "divan-limits")  # session_id -> its main thread's agent
 
 
 def segments(cmd):
@@ -64,8 +66,10 @@ def commands(cmd):
                     if w[0] == "--":
                         w = w[1:]
                         break
-                    if tool == "env" and w[0] in ("-S", "--split-string") and len(w) > 1:
-                        w = shlex.split(w[1]) + w[2:]  # env -S '<cmd>' runs <cmd>
+                    split = (w[1:2] if w[0] in ("-S", "--split-string") else [w[0][2:]] if w[0].startswith("-S")
+                             else [w[0].split("=", 1)[1]] if w[0].startswith("--split-string=") else None)
+                    if tool == "env" and split:
+                        w = shlex.split(split[0]) + w[1 + (w[0] in ("-S", "--split-string")):]  # env -S '<cmd>' runs <cmd>
                         break
                     n = 2 if w[0] in WRAP[tool] else 1
                     own, w = own + w[:n], w[n:]
@@ -103,8 +107,9 @@ def short_flags(args):
 
 
 def option_values(w, short, long):
-    """Values of an option given as `short v`, `long v` or `long=v`."""
+    """Values of an option given as `short v`, `shortv`, `long v` or `long=v`."""
     return ([w[i + 1] for i, a in enumerate(w[:-1]) if a in (short, long)]
+            + [a[len(short):] for a in w if a.startswith(short) and len(a) > len(short) and not a.startswith("--")]
             + [a.split("=", 1)[1] for a in w if a.startswith(long + "=")])
 
 
@@ -150,7 +155,7 @@ def reader(agent, w):
     if tool == "git":
         a, _ = git_args(w)
         sub, rest = (a or [""])[0], a[1:]
-        if "-c" in w[1:len(w) - len(a)]:
+        if any(o.startswith(("-c", "--config-env")) for o in w[1:len(w) - len(a)]):
             return "`git -c` can make git run any program"
         if (sub not in GIT_READ or sub == "worktree" and rest[:1] != ["list"]
                 or sub == "stash" and rest[:1] not in (["list"], ["show"])
@@ -162,7 +167,7 @@ def reader(agent, w):
     if tool == "gh":
         noun, verb = (gh_words(w) + ["", ""])[:2]
         if noun == "api":
-            methods = option_values(w, "-X", "--method") + [a[2:] for a in w if re.match(r"^-X.", a)]
+            methods = option_values(w, "-X", "--method")
             if any(re.match(r"^(-[fF]|--(field|raw-field|input))", a) for a in w) or any(m.upper() != "GET" for m in methods):
                 return "`gh api` with a body or a non-GET method writes"
         elif not (verb in GH_READ or noun == "search" or (noun, verb) == ("auth", "status")):
@@ -209,9 +214,28 @@ def brief_path(p):
     return os.path.basename(d) == "briefs" and os.path.isfile(os.path.join(os.path.dirname(d), "charter.md"))
 
 
+def session_agent(event):
+    """The divan agent whose limits apply: the event's own, else the one running its session's main thread, so a
+    worker's general-purpose subagent is still a worker. A plain session's main thread stays unlimited."""
+    own = (event.get("agent_type") or "").removeprefix("divan:")
+    sid = re.sub(r"[^\w-]", "", event.get("session_id") or "")
+    path = os.path.join(SESSIONS, sid)
+    if own in AGENTS:
+        if sid and not event.get("agent_id"):  # main thread
+            os.makedirs(SESSIONS, exist_ok=True)
+            with open(path, "w") as f:
+                f.write(own)
+        return own
+    try:
+        with open(path if sid else "") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
 def check(event):
-    agent = (event.get("agent_type") or "").removeprefix("divan:")
-    if agent not in ("manager", "worker", "reviewer", "critic"):
+    agent = session_agent(event)
+    if agent not in AGENTS:
         return None
     tool, inp = event.get("tool_name"), event.get("tool_input") or {}
     if tool == "Write" and agent == "manager" and not brief_path(inp.get("file_path", "")):
@@ -243,8 +267,9 @@ def test():
     def W(path):
         return check({"agent_type": "divan:manager", "tool_name": "Write", "tool_input": {"file_path": path}})
 
+    global SESSIONS
     tmp = tempfile.TemporaryDirectory()
-    ev = tmp.name
+    ev, SESSIONS = tmp.name, f"{tmp.name}/sessions"
     os.makedirs(f"{ev}/briefs")
     open(f"{ev}/charter.md", "w").close()
     os.symlink(f"{ev}/charter.md", f"{ev}/briefs/link.md")
@@ -328,6 +353,25 @@ def test():
               "git push origin refs/heads/main", "git push origin HEAD:refs/heads/deploy", "git push origin 'feat*'"):
         assert B("worker", c), c
     assert not B("worker", "git push origin feat:refs/heads/feat") and not B("worker", "time -o t.log git status")
+    for c in ("env --split-string='git push origin HEAD:main'", "env -S'git push origin main'"):
+        assert B("worker", c), c
+    assert B("critic", "env --split-string='superset browser eval --expression x'") and B("manager", "env -S'rm x'")
+    for c in ("git -ccore.pager='touch x' log", "git -c core.pager=less log", "git --config-env=core.pager=P log"):
+        assert B("manager", c) and B("reviewer", c), c
+    for c in ("codex review -c sandbox_mode=read-only -csandbox_mode=danger-full-access", "codex exec -s read-only -sdanger-full-access x",
+              "codex exec -s read-only --config=sandbox_mode=workspace-write x"):
+        assert B("reviewer", c), c
+    assert not B("reviewer", "codex exec -sread-only x") and not B("reviewer", "codex review -csandbox_mode=read-only")
+    # limits follow the session: a divan main thread's subagents get its limits; a plain session stays unlimited
+    def E(sid, agent_type, agent_id, cmd):
+        return check({"session_id": sid, "agent_type": agent_type, "agent_id": agent_id, "tool_name": "Bash",
+                      "tool_input": {"command": cmd}, "cwd": "/"})
+
+    assert not E("s1", "divan:worker", None, "git status")  # the worker's main thread records itself
+    assert E("s1", "general-purpose", "a1", "git push origin HEAD:main") and E("s1", "Explore", "a2", "gh pr merge 1")
+    assert E("s2", "divan:reviewer", "a3", "touch x") and not E("s2", None, None, "touch x")
+    assert not E("s3", "general-purpose", "a4", "git push origin HEAD:main")  # no divan session: untouched
+    assert E("s4", "divan:manager", None, "ls") is None and E("s4", "divan:reviewer", "a5", "superset ws list")
     tmp.cleanup()
     print("ok")
 
