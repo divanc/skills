@@ -155,13 +155,14 @@ Requirements:
 | critic | judges what users see against the charter | edit, post, click, `curl` | tools (WebFetch, Slack read-only); hook: the browser only looks; screenshots only to the evidence folder or `$TMPDIR` |
 
 The hook also checks commands inside wrappers (`env`, `xargs`, `bash -c`, ...),
-and blocks unknown git global options and unknown options on wrappers, shells
-and `curl`. The exact rules are in `hooks/limits.py`.
+and blocks unknown git global options, unknown options on wrappers and shells,
+and, for the manager, on `curl`. The exact rules are in `hooks/limits.py`.
 
-No divan agent merges: `gh pr merge` is blocked for all four. Your own session
-isn't limited, even when it spawns divan subagents. Any other subagent a divan
-agent spawns (general-purpose, Explore, ...) runs under that agent's limits; a
-reviewer or critic keeps its own.
+For every divan agent the hook blocks the merges it recognizes: `gh pr merge`,
+the merge API, GraphQL merge mutations. Your own session isn't limited, even
+when it spawns divan subagents. Any other subagent a divan agent spawns
+(general-purpose, Explore, ...) runs under that agent's limits; a reviewer or
+critic keeps its own.
 
 ### Gaps
 
@@ -175,8 +176,9 @@ reviewer or critic keeps its own.
 - Nothing confines a worker to its brief's files.
 - Agents started by the Workflow tool are untested against these limits.
 - Agents run on the owner's GitHub credentials, so GitHub can't tell an agent
-  merge from yours: the hook is what stops it. Require a PR and a review on
-  `main` and `deploy` so a push the hook misses still can't land.
+  merge from yours: the hook is what stops it, and only the merges it
+  recognizes. Require a PR and a review on `main` and `deploy` so a push or
+  merge the hook misses still can't land.
 
 ## License
 
