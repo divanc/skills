@@ -13,13 +13,27 @@ NON_GET = r"(-X|--method)[ =]?(?!GET\b)[A-Z]|\s(-f|-F|--field|--raw-field|--inpu
 
 
 def commands(cmd):
-    """Simple commands of cmd as word lists, split at ; && || | & ( ) and newlines, shell keywords dropped."""
-    lex = shlex.shlex(cmd.replace("\n", ";"), posix=True, punctuation_chars=True)
+    """Simple commands of cmd as word lists, split at ; && || | & ( ) and newlines, after dropping heredoc bodies
+    (data) and `#` comments (an unquoted `#` that starts a word, to the end of its line); shell keywords dropped."""
+    out, delim = [], None
+    for line in cmd.split("\n"):
+        if delim:
+            delim = None if line.strip() == delim else delim
+            continue
+        q = None
+        for i, ch in enumerate(line):
+            q = (ch if ch in "'\"" else None) if q is None else (None if ch == q else q)
+            if q is None and ch == "#" and (i == 0 or line[i - 1].isspace()):
+                line = line[:i]
+                break
+        out.append(line)
+        delim = (re.findall(r"(?<!<)<<(?!<)-?\s*['\"]?(\w+)", line) or [None])[-1]
+    lex = shlex.shlex(";".join(out), posix=True, punctuation_chars=True)
     lex.whitespace_split = True
     try:
         toks = list(lex)
     except ValueError:  # unbalanced quotes: read it word by word
-        toks = cmd.split()
+        toks = " ; ".join(out).split()
     out = [[]]
     for t in toks:
         if set(t) <= set(";&|()"):
@@ -32,7 +46,8 @@ def commands(cmd):
 def why(agent, w):
     tool, line, ops = w[0].rsplit("/", 1)[-1], " ".join(w), [a for a in w if not a.startswith("-")]
     if tool == "gh" and (re.search(r"\bpr merge\b", " ".join(ops))
-                         or re.search(r"pulls/\d+/merge", line) and re.search(NON_GET, line)):
+                         or re.search(r"pulls/\d+/merge", line) and re.search(NON_GET, line)
+                         or "graphql" in ops and re.search(r"mergePullRequest|enablePullRequestAutoMerge", line)):
         return "merging is divan's; no agent merges"
     args = w[1:]
     while tool == "git" and args and args[0].startswith("-"):  # skip git's -C/-c <value> and other global options
@@ -43,7 +58,9 @@ def why(agent, w):
                               or any(re.search(r"(^|[:/+])(main|deploy)$", a) for a in pos[1:])):
             return "workers never push to main or deploy; push your branch"
         return "name the destination: `git push origin <branch>`" if sub == "push" and len(pos) < 2 else None
-    if tool == "git" and sub not in GIT_READ:
+    reads = (sub == "branch" and set(args[1:]) <= {"-a", "-r", "-v", "-vv", "--list", "--show-current"}
+             or sub == "remote" and (args[1:] in ([], ["-v"]) or args[1:2] == ["get-url"]))
+    if tool == "git" and sub not in GIT_READ and not reads:
         return f"`git {sub}` writes; git is read-only here"
     if tool == "gh" and not (ops[2:3] and ops[2] in GH_READ or ops[1:2] == ["search"] or ops[1:3] == ["auth", "status"]
                              or ops[1:2] == ["api"] and not re.search(NON_GET, line)):
@@ -57,8 +74,8 @@ def why(agent, w):
             not re.search(r"(-s|--sandbox)[ =]read-only|sandbox_mode=read-only", line)
             or re.search(r"--yolo|--dangerously|--full-auto|(^| )-o( |$)|--output-last", line)):
         return "codex runs only with `-s read-only`, never `--yolo`, `--dangerously-*` or `-o`"
-    if agent == "critic" and tool in ("superset", "paradev") and not (
-            w[1:2] == ["browser"] and w[2:3] and w[2] in ("list", "open", "navigate", "screenshot", "console")):
+    if agent == "critic" and tool in ("superset", "paradev") and not (  # ops skips superset's options, like --json
+            ops[1:2] == ["browser"] and ops[2:3] and ops[2] in ("list", "open", "navigate", "screenshot", "console")):
         return "the critic uses only `superset browser list|open|navigate|screenshot|console`"
     return None
 
@@ -73,11 +90,8 @@ def session_agent(event):
             with open(os.path.join(SESSIONS, sid), "w") as f:
                 f.write(own)
         return own
-    try:
-        with open(os.path.join(SESSIONS, sid) if sid else "") as f:
-            return f.read().strip()
-    except OSError:
-        return None
+    path = os.path.join(SESSIONS, sid)
+    return open(path).read().strip() if sid and os.path.isfile(path) else None
 
 
 def check(event):
@@ -101,19 +115,24 @@ def test():
     B = lambda a, c, sid="", aid=None: check({"agent_type": a, "session_id": sid, "agent_id": aid,
                                               "tool_name": "Bash", "tool_input": {"command": c}})
     assert W(f"{ev}/src/a.py") and W(f"{ev}/briefs/../a.py") and not W(f"{ev}/briefs/T1.md")
-    blocked = {"manager": ["git commit -m x", "git push origin f", "gh pr create", "rm -rf x", "sed -i s/a/b/ f",
-                           "echo x > f", "if true; then rm x; fi"],
-               "worker": ["gh pr merge 1", "gh api -X PUT repos/o/r/pulls/1/merge", "git push origin main",
-                          "git push origin HEAD:deploy", "git push --all origin", "git push"],
-               "reviewer": ["touch x", "git commit -m x", "codex exec x", "codex exec --yolo -s read-only x",
-                            "codex exec -s read-only -o f x"],
-               "critic": ["superset browser eval 1", "touch x", "gh pr merge 1"]}
-    allowed = {"manager": ["npm test", "python3 -m pytest -q", "claude plugin validate .", "superset agents wait",
-                           "git log -3 && git diff --stat", "git status 2>&1 | head", "gh pr view 3 --json state"],
-               "worker": ["git push -u origin feat-x", "rm -rf build",
-                          "git commit -m \"$(cat <<'EOF'\nfix: it's done\nEOF\n)\""],
-               "reviewer": ["codex exec -s read-only - <<'EOF'\nReview a.md\nEOF", "gh pr list"],
-               "critic": ["superset browser screenshot --out /tmp/s.png", "git diff main"]}
+    blocked = {
+        "manager": ["git commit -m x", "git push origin f", "gh pr create", "rm -rf x", "sed -i s/a/b/ f", "echo x > f",
+                    "if true; then rm x; fi", "# clean up\nrm -rf x", "ls # c\ngit commit -m x", "echo 'a #b' && rm x"],
+        "worker": ["gh pr merge 1", "gh api -X PUT repos/o/r/pulls/1/merge", "git push origin main", "git push",
+                   "# Publish\ngit push origin main", "gh api graphql -f query='mutation{mergePullRequest(x)}'",
+                   "git push origin HEAD:deploy", "git push --all origin"],
+        "reviewer": ["touch x", "git commit -m x", "cat <<EOF\nx\nEOF\ntouch y", "codex exec x",
+                     "codex exec --yolo -s read-only x", "codex exec -s read-only -o f x"],
+        "critic": ["superset browser eval 1", "touch x", "gh pr merge 1"]}
+    allowed = {
+        "manager": ["npm test", "python3 -m pytest -q", "claude plugin validate .", "superset agents wait",
+                    "git log -3 && git diff --stat", "git status 2>&1 | head", "gh pr view 3 --json state"],
+        "worker": ["git push -u origin feat-x", "rm -rf build",
+                   "git commit -m \"$(cat <<'EOF'\nfix: it's done\nEOF\n)\""],
+        "reviewer": ["codex exec -s read-only - <<'EOF'\nReview a.md.\ngit commit is forbidden.\nEOF", "gh pr list",
+                     "git branch --show-current", "git branch -a -v", "git remote -v", "git remote get-url origin"],
+        "critic": ["superset browser screenshot --out /tmp/s.png", "superset --json browser list",
+                   "git log --grep '#12'", "echo 'a # b' && ls"]}
     assert all(B("divan:" + a, c) for a, cs in blocked.items() for c in cs)
     assert not any(B("divan:" + a, c) for a, cs in allowed.items() for c in cs)
     assert not B("divan:worker", "git status", "s1") and B("general-purpose", "git push origin main", "s1", "a1")

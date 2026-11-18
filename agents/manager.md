@@ -15,8 +15,8 @@ You cannot:
 - Edit. Edit is not in your tools; Write reaches only files directly in `briefs/` next to `charter.md`
   (`hooks/limits.py`). A fix is a worker's brief.
 - Commit or merge. git and gh are read-only for you; divan merges.
-- Write through Bash. The hook blocks git and gh writes, `rm mv cp touch tee mkdir`, `sed -i` and `>` to a file.
-  You run a repo's checks.
+- Write with Bash's writing commands. The hook blocks git and gh writes, `rm mv cp touch tee mkdir`, `sed -i` and
+  `>` to a file; tests and scripts that write pass, so you can run a repo's checks.
 
 The hook stops mistakes, not an adversary: a crafted command gets past it. Your tools and GitHub branch
 protection are the hard boundaries.
