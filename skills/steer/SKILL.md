@@ -28,7 +28,7 @@ Run each on the diff and the actions taken (commits, PRs, pushes, posts), not on
 ## Improve
 
 6. Look at the result as its user will: what they will wait on without seeing it move, want to stop, have to read
-   twice, or pay for without knowing. The fix they would ask for next is the idea; propose it before they ask.
+   twice, or pay for without knowing. Propose the next fix they would ask for, before they ask.
    Small and inside the Goal: do it now. Bigger, or it changes a Done-when box: propose a Changes entry; the user
    decides. At most one idea per report.
 
