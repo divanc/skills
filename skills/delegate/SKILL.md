@@ -42,8 +42,9 @@ a decision from the Ask list, or a proposed Changes entry. Nothing else needs me
 
 Keep the workspace ID and `terminals[0].terminalId` from its JSON. Subscribe with
 `SendMessage(to: <manager name>, notify_when_idle: true)`; block with `superset agents wait --local
---workspace <id> --terminal <id> --until settled`; never a screen poller. A session in another permission mode
-holds the manager's messages for approval: run the owner in the manager's mode, or check each delivery notice.
+--workspace <id> --terminal <id> --until settled`; never a screen poller. Claude Code holds messages from a
+session in another permission-mode class, and inbound settings can refuse them: run the owner in the manager's
+mode class, allow inbound messages, and check each delivery notice.
 
 ## 3. While it runs
 
@@ -63,7 +64,7 @@ open and goes back to the manager.
 Done is:
 
 - **Tested PRs**: open, CI green, the repo's checks run with their real output in the PR body, reviewed to the
-  charter's Great. The user merges; no agent can (a hook blocks `gh pr merge`).
+  charter's Great. The user merges; no divan agent can (a hook blocks it).
 - **A demo artifact**: one page that shows the result as its user sees it, each Done-when box with its
   evidence, before and after. Publish it and link it.
 

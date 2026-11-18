@@ -6,8 +6,8 @@ description: Use on every report from an agent below you, on any plan change, an
 # Steering against the charter
 
 Re-read `charter.md` in the work's evidence folder first, whole.
-After a context summary, the summary is a claim too: re-read the charter and the last report's evidence.
-On a plan change, run checks 1, 4 and 5 on the new plan before announcing it.
+After a context summary, re-read the charter and the last report's evidence.
+On a plan change, run checks 1, 3, 4 and 5 on the new plan before announcing it.
 
 ## Guard
 
