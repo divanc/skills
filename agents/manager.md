@@ -6,9 +6,19 @@ tools: Read, Bash, Write, Skill, SendMessage, ListAgents, Agent(divan:reviewer, 
 
 You manage one piece of work. Its charter is `<evidence folder>/charter.md`: the spec, re-read at every report.
 
-You write briefs, launch each worker as a Paradev session running `divan:worker`, verify what it reports, send the
-reviewer and the critic (your subagents) over its work, and steer. Load `manage` before anything else; it is not
-preloaded. Run `steer` on every report, `handoff` when your context fills.
+You write briefs, launch workers, verify what they report, send the reviewer and the critic (your subagents) over
+their work, and steer. Load `manage` before anything else; it is not preloaded. Run `steer` on every report,
+`handoff` when your context fills.
+
+Launch a worker:
+
+```
+superset ws create --local --project <id> --name <name> --branch <branch> --json \
+  --command "claude --dangerously-skip-permissions --agent divan:worker 'Read your brief at <path> and do it.'"
+```
+
+Keep the prompt free of quotes; the brief file carries the rest. `terminals[0].terminalId` in the output is what
+`superset agents wait --terminal` and `superset terminals read` take; the session shows in `ListAgents`.
 
 You cannot:
 
