@@ -5,9 +5,7 @@ description: Use when a manager's context passes 60%, or when a manager is told 
 
 # Handing off a manager
 
-A manager runs on IDs, rules and gates it holds in context. A context summary drops those first, so hand
-off before one: past 60% context, at a break where no report is half-read. After a summary is too late; the
-file can only hold what you still have.
+Hand off past 60% context, at a break where no report is half-read.
 
 ## 1. Write the state
 
@@ -41,8 +39,8 @@ Kept alive: <ids, why>. Closed: <ids>. Not mine, leave alone: <ids, whose>.
 
 - **State says what happens next and who gives the go**: "mid-task; live runs wait for your go", not "in
   progress".
-- **Each rule carries its number and reason**: "at most 4 runs an hour; stop at the first 429". The reason
-  lets the new manager apply it to a case you never met.
+- **Each rule carries its number and reason**: "at most 4 runs an hour: a shared budget; stop at the first
+  429". The reason lets the new manager apply it to a case you never met.
 - **"Not mine, leave alone"** stops the new manager closing a terminal it doesn't recognise.
 
 Link the charter and briefs; don't copy them. The file is the state, not the history.
@@ -53,14 +51,15 @@ You launch it, in your workspace:
 
 ```
 superset terminals create --local --workspace $SUPERSET_WORKSPACE_ID --json \
-  --command "claude --dangerously-skip-permissions --agent divan:manager 'Load the handoff skill and take over from <handoff path>.'"
+  --command "claude --dangerously-skip-permissions -n <new name> --agent divan:manager 'Load the handoff skill and take over from <handoff path>.'"
 ```
 
-Same workspace, so it has your worktree and evidence folder. No quotes in the prompt; the file names you for
-`TOOK OVER`. The output's `terminalId` is what step 4's `agents wait` takes.
+Same workspace, so it has your worktree and evidence folder. `-n` sets the name it is reached by; pick one
+yours isn't. No quotes in the prompt; the file names you for `TOOK OVER`. The output's `terminalId` is what
+step 4's `agents wait` takes.
 
 Not `--from-terminal`: it seeds the session with the last 36k characters of your screen, mostly tool
-output, which is the context you are handing off to escape. The file is the state.
+output, which is the context you are handing off to escape.
 
 From launch, act on nothing. Two managers on one board give conflicting orders.
 
@@ -69,7 +68,7 @@ From launch, act on nothing. Two managers on one board give conflicting orders.
 Read the handoff file in full, then the charter. The file is a claim written from a full context. Before
 acting, check each row against the world:
 
-- `superset terminals list --workspace <id>` per task: the terminal is alive, the agent is where the file
+- `superset terminals list --local --workspace <id>` per task: the terminal is alive, the agent is where the file
   says.
 - `gh pr list`, `git log` per branch: what is open, what is committed.
 - Anything the file says is running (a review, a deploy): look at it.
@@ -78,7 +77,8 @@ Where they disagree, the world wins: fix the file and name the mismatch in your 
 
 Then, in order:
 
-1. SendMessage the old manager: `TOOK OVER`, plus any mismatch.
+1. SendMessage the old manager: `TOOK OVER`, plus any mismatch. Not in `ListAgents`: skip this, and say so
+   in step 2.
 2. SendMessage the owner: "I manage <work> now, taking over from `<old name>`; state in <handoff path>."
    The owner replies to the name on that message.
 3. SendMessage every live worker: "Your manager is now `<your name>`; send DONE or BLOCKED here." Their
@@ -93,5 +93,11 @@ On `TOOK OVER`, close your own terminal:
 superset terminals close --local --workspace $SUPERSET_WORKSPACE_ID --terminal $SUPERSET_TERMINAL_ID
 ```
 
-No `TOOK OVER` by the time `superset agents wait --terminal <new> --until settled` returns: read its
-screen (`superset terminals read`), fix what stopped it, relaunch.
+No `TOOK OVER` by the time this returns:
+
+```
+superset agents wait --local --workspace $SUPERSET_WORKSPACE_ID --terminal <new> --until settled
+```
+
+read its screen (`superset terminals read --local --workspace $SUPERSET_WORKSPACE_ID --terminal <new>`), fix
+what stopped it, relaunch.

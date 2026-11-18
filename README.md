@@ -69,11 +69,10 @@ verified.
 
 ### delegate
 
-Hands a piece of work to a manager agent; you stay the owner.
+Hands a piece of work to a manager agent, so your context holds the user's
+intent, not the workers' reports.
 
-When the agent you talk to also runs the workers, its context fills with their
-reports and your intent gets summarized away. This skill splits the roles. You
-write a one-screen charter with the user — the goal in their words, what great
+You write a one-screen charter with the user — the goal in their words, what great
 looks like, done-when boxes each with its evidence, hard rules, the decisions
 that stay theirs — start a manager in its own session, and accept its result
 box by box against the evidence.
@@ -87,8 +86,7 @@ box by box against the evidence.
 Keeps work on its charter. Runs on every report from below, every plan change,
 and after a context summary.
 
-Agents drift quietly: "done" without proof, a rule bent to finish, scope that
-grew without anyone deciding it. Steer re-reads the charter and runs five guard
+Steer re-reads the charter and runs five guard
 checks — goal, evidence over claims, rules, drift, decisions that belong to the
 user — then one improve check: what the user will ask for next.
 
@@ -101,9 +99,7 @@ user — then one improve check: what the user will ask for next.
 
 Replaces a manager whose context is filling.
 
-A long run outlives one context, and a summary drops exactly what a manager
-runs on: terminal IDs, rules with their numbers, gates. Past 60% context the
-manager writes the state to a file, starts a fresh manager from it, and closes
+Past 60% context the manager writes the state to a file, starts a fresh manager from it, and closes
 once the new one confirms.
 
 - **State file** — task table with IDs, rules in force, what's left, where things live.
@@ -138,10 +134,18 @@ get separate directories instead of clobbering one checkout.
 ## Agents
 
 For the 3-layer setup: you (the owner, with `delegate` and `steer`) → a manager
-→ workers. Each agent says who it is and what it can't do, and the limits are
-enforced by its tools and `hooks/limits.py`, not asked for in prose. Workers and
-the manager run as Paradev sessions (`claude --agent divan:<name>`); the
-reviewer and critic are the manager's subagents.
+→ workers. Each agent says who it is and what it can't do; its tools and
+`hooks/limits.py` enforce what the table lists, and [Gaps](#gaps) names what
+they don't. Workers and the manager run as Paradev sessions (`claude --agent
+divan:<name>`); the reviewer and critic are the manager's subagents.
+
+Requirements:
+
+- Paradev, for the `superset` CLI that launches and watches sessions.
+- `python3`, for the hook.
+- Codex CLI, for the reviewer.
+- Owner and manager sessions in the same permission mode; otherwise
+  cross-session messages wait for approval.
 
 | agent | does | can't | enforced by |
 |---|---|---|---|
@@ -152,10 +156,14 @@ reviewer and critic are the manager's subagents.
 
 No agent merges: `gh pr merge` is blocked for all four.
 
-Gaps. The hook matches Bash as command text, so a command it allows can still
-be made to write (`sed`'s `w`, a script on disk). Nothing confines a worker to
-its worktree; its brief names its files. The real boundary for pushes and
-merges is GitHub branch protection on `main` and `deploy`; turn it on.
+### Gaps
+
+- The hook matches Bash as command text, so a command it allows can still be
+  made to write (`sed`'s `w`, a script on disk).
+- Nothing confines a worker to its worktree; its brief names its files.
+- Agents run on the owner's GitHub credentials, so GitHub can't tell an agent
+  merge from yours: the hook is what stops it. Require a PR and a review on
+  `main` and `deploy` so a push the hook misses still can't land.
 
 ## License
 
