@@ -5,7 +5,7 @@ Bash rules read the command text, so a command that writes through its own synta
 The manager is on a denylist so it can run a repo's checks; the reviewer and the critic are on an allowlist.
 `python3 limits.py --test` runs the self-check.
 """
-import json, os, re, shlex, subprocess, sys, tempfile
+import json, os, re, shlex, sys, tempfile
 
 READ = {"git", "gh", "ls", "cat", "head", "tail", "wc", "rg", "grep", "jq", "pwd", "echo", "printf", "date", "diff",
         "stat", "file", "tree", "sort", "uniq", "cut", "which", "true", "cd", "find", "test", "["}
@@ -16,6 +16,10 @@ WRAP_VALUE = {"-n", "-I", "-P", "-L", "-d", "-E", "-s", "-u", "-g", "-C"}  # wra
 GIT_READ = {"status", "log", "diff", "show", "rev-parse", "ls-files", "grep", "blame", "describe", "shortlog",
             "cat-file", "ls-tree", "merge-base", "rev-list", "worktree", "branch", "remote", "stash"}
 GH_READ = {"view", "list", "diff", "checks", "status", "watch"}
+GH_VALUE = {"-R", "--repo", "--hostname", "-X", "--method", "-H", "--header", "-f", "-F", "--field", "--raw-field",
+            "--input", "-q", "--jq", "-t", "--template", "--json", "-b", "--body", "--title", "-L", "--limit"}
+BRANCH_READ = {"-a", "-r", "-v", "-vv", "--list", "--show-current", "--contains", "--merged", "--no-merged"}
+BRANCH_PATTERN = {"--list", "--contains", "--merged", "--no-merged"}  # options that take a pattern or commit
 BROWSER_READ = {"list", "open", "navigate", "screenshot", "console"}
 SEP = {"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"}
 REDIR = set("<>&")
@@ -48,8 +52,8 @@ def commands(cmd):
             tool = w[0].rsplit("/", 1)[-1]
             if re.match(r"^\w+=", w[0]):
                 w = w[1:]
-            elif tool in ("sh", "bash", "zsh") and "-c" in w[1:-1]:
-                yield from commands(w[w.index("-c") + 1])
+            elif tool in ("sh", "bash", "zsh") and any(re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", a) for a in w[1:-1]):
+                yield from commands(w[next(i for i, a in enumerate(w) if re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", a)) + 1])
                 w = []
             elif tool in WRAP:
                 w = w[1:]
@@ -88,6 +92,18 @@ def option_values(w, short, long):
             + [a.split("=", 1)[1] for a in w if a.startswith(long + "=")])
 
 
+def gh_words(w):
+    """Positional words of a gh command, options skipped: `gh pr --repo o/r merge 1` is [pr, merge, 1]."""
+    out, i = [], 1
+    while i < len(w):
+        if w[i].startswith("-"):
+            i += 2 if w[i] in GH_VALUE else 1
+        else:
+            out.append(w[i])
+            i += 1
+    return out
+
+
 def codex_read_only(w):
     sub = (w[1:2] or [""])[0]
     if any(a.startswith("--dangerously") or a in ("--full-auto", "-p", "--profile") for a in w):
@@ -110,7 +126,8 @@ def reader(agent, w):
             return "sed -i edits files"
     elif tool not in READ | EXTRA[agent]:
         return f"`{tool}` is not on the {agent}'s read-only list"
-    if any(a.startswith("--output") for a in w) or tool in ("sort", "tree") and "-o" in w:
+    if (any(a.startswith("--output") for a in w) or tool in ("sort", "tree") and any(re.match(r"^-[a-zA-Z]*o", a) for a in w[1:])
+            or tool == "uniq" and len([a for a in w[1:] if not a.startswith("-")]) > 1):
         return "an output file"
     if tool == "find" and {"-delete", "-exec", "-execdir", "-ok", "-fprint", "-fprint0", "-fprintf", "-fls"} & set(w):
         return "find with -delete, -exec or -fprint"
@@ -121,13 +138,17 @@ def reader(agent, w):
             return "`git -c` can make git run any program"
         if (sub not in GIT_READ or sub == "worktree" and rest[:1] != ["list"]
                 or sub == "stash" and rest[:1] not in (["list"], ["show"])
-                or sub in ("branch", "remote") and any(not r.startswith("-") or r in ("-d", "-D", "-m", "-M", "-f")
-                                                       for r in rest)):
+                or sub == "branch" and (any(r.split("=")[0] not in BRANCH_READ for r in rest if r.startswith("-"))
+                                        or any(not r.startswith("-") for r in rest) and not BRANCH_PATTERN & set(rest))
+                or sub == "remote" and rest not in ([], ["-v"]) and rest[:1] not in (["show"], ["get-url"])):
             return f"`git {sub}` writes; git is read-only here"
     if tool == "gh":
-        noun, verb = (w[1:2] or [""])[0], (w[2:3] or [""])[0]
-        api_writes = re.search(r"(-X|--method)(?![ =]*GET\b)|\s(-f|-F|--field|--raw-field|--input)\b", line)
-        if not (verb in GH_READ or noun == "search" or (noun, verb) == ("auth", "status") or noun == "api" and not api_writes):
+        noun, verb = (gh_words(w) + ["", ""])[:2]
+        if noun == "api":
+            methods = option_values(w, "-X", "--method") + [a[2:] for a in w if re.match(r"^-X.", a)]
+            if any(re.match(r"^(-[fF]|--(field|raw-field|input))", a) for a in w) or any(m.upper() != "GET" for m in methods):
+                return "`gh api` with a body or a non-GET method writes"
+        elif not (verb in GH_READ or noun == "search" or (noun, verb) == ("auth", "status")):
             return f"`gh {noun} {verb}` writes; gh is read-only here"
     if tool == "codex" and not codex_read_only(w):
         return "codex runs only in its read-only sandbox: `exec -s read-only` or `review -c sandbox_mode=\"read-only\"`"
@@ -138,21 +159,18 @@ def reader(agent, w):
     return None
 
 
-def worker(w, cwd):
+def worker(w):
     """Why the worker may not run w: pushes to main/deploy and git commands that sweep files."""
     if w[0].rsplit("/", 1)[-1] != "git":
         return None
-    a, path = git_args(w)
+    a, _ = git_args(w)
     sub, rest = (a or [""])[0], a[1:]
     pos = [x for x in rest if not x.startswith("-")]
     if sub == "push":
         if {"--all", "--mirror"} & set(rest) or any(re.search(r"(^|[:/+])(main|deploy)$", x) for x in pos[1:]):
             return "workers never push to main or deploy; push your branch"
-        if len(pos) < 2:  # no refspec: pushes the current branch
-            head = subprocess.run(["git", "-C", path or cwd, "rev-parse", "--abbrev-ref", "HEAD"],
-                                  capture_output=True, text=True).stdout.strip()
-            if head in ("main", "deploy"):
-                return "workers never push to main or deploy; push your branch"
+        if len(pos) < 2 or any(re.match(r"^\+?(HEAD|@)$", x) for x in pos[1:]):  # the destination comes from config
+            return "name the destination: `git push origin <branch>`"
     sweeps = (sub == "add" and ({"-A", "--all"} & set(rest) or "." in pos)
               or sub == "commit" and any(r == "--all" or re.match(r"^-[a-zA-Z]*a", r) for r in rest)
               or sub == "stash" and rest[:1] not in (["list"], ["show"])
@@ -181,11 +199,13 @@ def check(event):
     if tool != "Bash":
         return None
     cmd = inp.get("command", "")
-    if re.search(r"\bgh\b.*\bpr\s+merge\b|pulls/\d+/merge", cmd):
+    merges = re.search(r"pulls/\d+/merge", cmd) or any(
+        w[0].rsplit("/", 1)[-1] == "gh" and gh_words(strip_redirects(w))[:2] == ["pr", "merge"] for w in commands(cmd))
+    if merges:
         return "merging is divan's; no agent merges"
     for w in commands(cmd):
         if agent == "worker":
-            why = worker(strip_redirects(w), event.get("cwd", "."))
+            why = worker(strip_redirects(w))
         else:
             why = "output redirect to a file" if redirects_to_file(w) else reader(agent, strip_redirects(w))
         if why:
@@ -200,7 +220,8 @@ def test():
     def W(path):
         return check({"agent_type": "divan:manager", "tool_name": "Write", "tool_input": {"file_path": path}})
 
-    ev = tempfile.mkdtemp()
+    tmp = tempfile.TemporaryDirectory()
+    ev = tmp.name
     os.makedirs(f"{ev}/briefs")
     open(f"{ev}/charter.md", "w").close()
     os.symlink(f"{ev}/charter.md", f"{ev}/briefs/link.md")
@@ -242,6 +263,25 @@ def test():
         assert B("critic", c), c
     assert not B("critic", "superset browser screenshot --out /tmp/s.png")
     assert not check({"tool_name": "Bash", "tool_input": {"command": "gh pr merge 1"}})  # plain sessions untouched
+    # Codex round 2 bypasses, each must block
+    for a in ("manager", "worker", "reviewer", "critic"):
+        assert B(a, "gh pr --repo o/r merge 1") and B(a, "gh -R o/r pr merge 1") and B(a, "bash -lc 'gh pr merge 1'"), a
+    for c in ("bash -lc 'git push origin HEAD:main'", "sh -ec 'git push origin main'", "git push", "git push origin",
+              "git push -u origin HEAD"):
+        assert B("worker", c), c
+    assert not B("worker", "git push -u origin feat")
+    for a in ("manager", "reviewer", "critic"):
+        for c in ("bash -lc 'rm x'", "zsh -xc 'touch x'", "sort -o/tmp/a /tmp/b", "sort -ro /tmp/a b", "sort --output=/tmp/a b",
+                  "tree -o/tmp/t", "uniq a b", "git branch --edit-description", "git branch -m a b", "git branch new",
+                  "git remote add x u", "gh api repos/o/r/issues -ftitle=a", "gh api repos/o/r/issues -Fx=1",
+                  "gh api repos/o/r/issues --field=title=a", "gh api repos/o/r/issues --input f.json",
+                  "gh api -X POST repos/o/r/issues", "gh api -XPOST repos/o/r/issues", "gh api --method=PATCH repos/o/r"):
+            assert B(a, c), (a, c)
+        for c in ("git branch -a", "git branch --show-current", "git branch --contains abc", "git branch --list 'f*'",
+                  "git remote -v", "git remote get-url origin", "gh api repos/o/r/pulls", "gh api -X GET repos/o/r",
+                  "gh --repo o/r pr view 1", "sort -r a"):
+            assert not B(a, c), (a, c)
+    tmp.cleanup()
     print("ok")
 
 
