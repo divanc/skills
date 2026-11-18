@@ -34,13 +34,13 @@ Run each on the diff and the actions taken (commits, PRs, pushes, posts), not on
 
 ## Output
 
-The first failing check decides: 5 escalates, 1-4 correct, 6 improves, none continues. A correction lists every
-failed check. Each line quotes the charter line (or, for check 3, the repo rule) it rests on; nothing to quote,
-no correction.
+The guard sets the verdict: check 5 failed escalates, never corrects; else 1-4 failed corrects; else continue.
+A correction lists every failed check. The one improve line rides with any verdict. Each line quotes the charter
+line (or, for check 3, the repo rule) it rests on; nothing to quote, no correction.
 
 ```
 continue
-correct: <check>: <what is wrong, what to do>. "<charter line>"
+correct: <check 1-4>: <what is wrong, what to do>. "<charter line>"
 improve: <the idea>; <now | proposed Changes entry>. "<charter line>"
 escalate: <the decision, its options, your recommendation>. "<charter line>"
 ```
