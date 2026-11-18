@@ -98,67 +98,55 @@ def skip_bodies(cmd, i, pending):
     """Index after the heredoc bodies that start at i. A body is data; one whose delimiter is unquoted expands
     $(...) and backticks, so such a body that has them blocks, as does a body with no closing delimiter."""
     for delim, quoted, dash in pending:
+        line = ""
         while True:
             if i >= len(cmd):
                 raise Blocked(f"heredoc `{delim}` has no closing line")
             end = cmd.find("\n", i) % (len(cmd) + 1)
-            line = cmd[i:end]
-            i = end + 1
+            line, i = line + cmd[i:end], end + 1
+            if not quoted and re.search(r"(^|[^\\])(\\\\)*\\$", line):  # unquoted: backslash-newline joins lines
+                line = line[:-1]
+                continue
             if (line.lstrip("\t") if dash else line) == delim:
                 break
             if not quoted and re.search(r"\$\(|`", line):
                 raise Blocked("a heredoc with an unquoted delimiter runs its $(...)")
+            line = ""
     return i
 
 
-def strip_comments(cmd):
-    """cmd without its comments and heredoc bodies. An unquoted `#` that starts a word runs to the next newline, which
-    stays and so still ends the command; a backslash at a comment's end does not continue it (bash agrees)."""
-    out, q, i, pending = [], None, 0, []
+def preprocess(cmd):
+    """cmd as bash reads it before splitting words, in one pass and bash's order: a backslash-newline outside single
+    quotes is removed first, so `foo\\<newline>#bar` is one word; then an unquoted `#` that starts a word (not after an
+    escaped space) drops the rest of the line, keeping the newline, and a backslash there continues nothing; heredoc
+    bodies are dropped (see skip_bodies)."""
+    out, q, i, pending, word_start = "", None, 0, [], True
     while i < len(cmd):
         ch = cmd[i]
         if q != "'" and ch == "\\":
-            out.append(cmd[i:i + 2])
+            if cmd[i + 1:i + 2] != "\n":  # an escaped character is part of the word
+                out, word_start = out + cmd[i:i + 2], False
             i += 2
             continue
-        if q is None and ch == "#" and (i == 0 or cmd[i - 1].isspace() or cmd[i - 1] in OPS):
+        if q is None and ch == "#" and word_start:
             i = cmd.find("\n", i) % (len(cmd) + 1)
             continue
         if q is None and cmd.startswith("<<", i) and not cmd.startswith("<<<", i):
             *marker, j = heredoc(cmd, i)
-            out.append(cmd[i:j])
+            out, i, word_start = out + cmd[i:j], j, False
             pending.append(marker)
-            i = j
             continue
         if q is None and ch == "\n" and pending:
-            out.append(ch)
+            out, word_start = out + ch, True
             i, pending = skip_bodies(cmd, i + 1, pending), []
             continue
         if q is None and ch in "'\"":
             q = ch
         elif ch == q:
             q = None
-        out.append(ch)
+        out, word_start = out + ch, q is None and (ch.isspace() or ch in OPS)
         i += 1
-    return "".join(out)
-
-
-def join_lines(cmd):
-    """cmd with backslash-newline continuations removed, as the shell does outside single quotes."""
-    out, q, i = [], None, 0
-    while i < len(cmd):
-        ch = cmd[i]
-        if q != "'" and ch == "\\":
-            out.append("" if cmd[i + 1:i + 2] == "\n" else cmd[i:i + 2])
-            i += 2
-            continue
-        if q is None and ch in "'\"":
-            q = ch
-        elif ch == q:
-            q = None
-        out.append(ch)
-        i += 1
-    return "".join(out)
+    return out
 
 
 def protect(cmd):
@@ -275,9 +263,9 @@ def substitutions(cmd):
 
 def segments(cmd):
     """Simple commands in cmd as word lists; $(...) and `...` bodies count as commands too."""
-    cmd = strip_comments(cmd)
+    cmd = preprocess(cmd)
     out = [seg for body in substitutions(cmd) for seg in segments(body)]
-    lex = shlex.shlex(protect(join_lines(cmd)), posix=True, punctuation_chars=True)
+    lex = shlex.shlex(protect(cmd), posix=True, punctuation_chars=True)
     lex.whitespace_split, lex.commenters = True, ""  # comments are already gone
     try:
         toks = [unprotect(t) for t in lex]
@@ -1017,6 +1005,14 @@ def test():
                   "rg -e --pre x f"):
             assert not B(a, c), (a, c)
     assert not B("manager", "sed -e --in-place f") and not B("manager", "sed --expression -i f") and B("manager", "sed -ni s/a/b/ f")
+    # bash's order: continuations join before comments; an escaped space keeps `#` inside the word
+    for a, c in (("manager", "rm victim"), ("reviewer", "touch victim"), ("critic", "touch victim"), ("worker", "git push origin main")):
+        assert B(a, f"echo foo\\\n#bar; {c}") and B(a, f"echo a\\ #b; {c}") and B(a, f"echo a # b \\\n{c}"), (a, c)
+        assert not B(a, f"echo a #b; {c}"), (a, c)
+    assert B("manager", "cat <<EOF # c\nbody\nEOF\nrm victim") and not B("manager", "cat <<EOF # c\nrm in body\nEOF")
+    assert B("manager", "cat <<EOF\n$\\\n(rm x)\nEOF") and not B("manager", "cat <<'EOF'\n$\\\n(rm x)\nEOF")
+    assert not B("manager", "cat <<EOF\na \\\\\nEOF")  # an escaped backslash ends the line: no join
+    assert not B("manager", "cat <<'EOF'\nx\\\nEOF\nls")  # quoted: a trailing backslash is data
     here = os.getcwd()
     os.chdir(ev)  # relative paths would resolve inside the evidence folder; they block anyway
     for c in ("superset browser screenshot --out shot.png", "superset browser screenshot --out ./s.png",
