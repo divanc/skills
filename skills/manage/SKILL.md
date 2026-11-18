@@ -16,12 +16,35 @@ smaller than its brief.
 For each phase:
 
 1. **Brief and launch** one subagent.
-2. **Read the report** as a claim, not a result.
+2. **Read the report** as a claim, not a result. Run `steer` on it.
 3. **Verify it yourself.** Re-run the check that matters. Read the diff.
 4. **Decide**: accept, send back, or change the plan.
 5. **Commit** by explicit path, and reprint the board.
+6. **Close the worker** once its work is integrated: `superset terminals close --workspace <id>
+   --terminal <id>`. A finished worker left open is one more terminal the next reader must tell apart from
+   live work.
 
 Never report to the user before you have the agent's result.
+
+Workers launch as `divan:worker`, reviewers as `divan:reviewer`, critics as `divan:critic`. The agent
+holds the limits; the brief holds the task:
+
+```
+superset agents create --local --workspace <id> --agent <TODO(W1): how to start divan:worker> \
+  --prompt "<brief>"
+```
+
+## Finish signals
+
+A done you don't see costs the worker's idle time and yours; a screen poller once missed one for seven
+minutes. Every brief ends with the report envelope below, so the worker's last action is a `SendMessage`
+to you. That message is the signal.
+
+At launch, subscribe with `SendMessage(to: <worker session>, notify_when_idle: true)` and no message; the
+session is the new `ListAgents` row named after its workspace. To block on one worker, `superset agents
+wait --workspace <id> --terminal <id> --until settled`. Both are wake-ups, not proof of done: a worker
+running nested `claude -p` sessions settles on their stops. Woken without a DONE or BLOCKED, read its
+screen (`superset terminals read`). The notice is one-shot; re-subscribe.
 
 **The board** — reprinted whenever a phase lands or the user asks:
 
@@ -34,7 +57,8 @@ Never report to the user before you have the agent's result.
 ```
 
 After a context summary, the board plus the commits is enough to resume. Each brief's `State` line
-is copied from it; writing that line from memory means you skipped step 5.
+is copied from it; writing that line from memory means you skipped step 5. Past 60% context, run
+`handoff` before the summary comes.
 
 ## Sizing a phase
 
@@ -62,8 +86,14 @@ free port and name it. Work on a copy of any real database (`cp -c`), never the 
 If something outside your files must change, stop and report — do not change it.
 The user approved this direction — decide and act, do not defer.
 Verify: <commands>. Paste the real output.
-Report: what you built, the verification output, what you found and deliberately did not fix,
-and any decision you need from me.
+Report: your last action is a SendMessage to `<my session name>`, then print the same text:
+  DONE <task>   (or BLOCKED <task>)
+  summary: <one line>
+  commit: <sha> on <branch>
+  files: <paths>
+  checks: <what you ran; the real output or a path to it>
+  not fixed, on purpose: <list or none>
+  needs: <a decision from me, or none>
 ```
 
 Hand judgement calls down with their reasoning and require the decisions back. Centralising them is
@@ -95,6 +125,20 @@ agent relied on.
 **The "deliberately did not fix" list is the most reliable part of a report**; the summary is the
 least. Each item becomes a phase or an explicit decline to the user — left in the transcript, it is
 lost at the next summary.
+
+### The reviewer loop
+
+Every PR, before it goes up. Each round is a fresh `divan:reviewer` (Codex), given the changed files and
+the charter's Great, not the writer's report or reasoning: a reviewer handed the reasoning grades the
+reasoning, and one that saw the last round checks its own findings instead of the file. It returns
+`score: N/10` per file with findings. Below 10, the findings go to the worker and a new reviewer scores
+the fix. Stop at 10/10 on every file; quote the final verdict in the PR.
+
+### The critic
+
+What users see (Slack messages, UI) also goes to a `divan:critic`, judged against the charter's
+references, PASS or FAIL per reference with quoted evidence. Tests prove it works, not that it reads
+right.
 
 ### Audit agents
 

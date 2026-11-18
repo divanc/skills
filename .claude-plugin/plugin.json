@@ -19,6 +19,7 @@
     "./skills/big-picture",
     "./skills/manage",
     "./skills/delegate",
-    "./skills/steer"
+    "./skills/steer",
+    "./skills/handoff"
   ]
 }
