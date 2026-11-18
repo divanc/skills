@@ -9,7 +9,14 @@ KEYWORDS = {"if", "then", "else", "elif", "while", "until", "do", "!", "{"}
 GIT_READ = {"status", "log", "diff", "show", "blame", "grep", "ls-files", "ls-tree", "cat-file", "rev-parse",
             "describe", "shortlog", "merge-base", "rev-list"}
 GH_READ = {"view", "list", "diff", "checks", "status", "watch"}
-NON_GET = r"(-X|--method)[ =]?(?!GET\b)[A-Z]|\s(-f|-F|--field|--raw-field|--input)\b"  # gh api that writes
+BRANCH_READ = {"-a", "-r", "-v", "-vv", "-l", "--list", "--show-current", "--contains", "--no-contains", "--merged",
+               "--no-merged", "--points-at", "--sort", "--format"}  # the last six take an argument
+
+
+def api_writes(line):
+    """True if a `gh api` call writes: an explicit non-GET method, else a field or input (which implies POST)."""
+    method = re.findall(r"(?:-X|--method)[ =]?([A-Za-z]+)", line)
+    return method[-1].upper() != "GET" if method else bool(re.search(r"\s(-f|-F|--field|--raw-field|--input)\b", line))
 
 
 def commands(cmd):
@@ -20,13 +27,14 @@ def commands(cmd):
         if delim:
             delim = None if line.strip() == delim else delim
             continue
-        q = None
+        q, chars = None, []
         for i, ch in enumerate(line):
             q = (ch if ch in "'\"" else None) if q is None else (None if ch == q else q)
             if q is None and ch == "#" and (i == 0 or line[i - 1].isspace()):
                 line = line[:i]
                 break
-        out.append(line)
+            chars.append(chr(0xE000 + ord(ch)) if q and ch in "<>|&;()" else ch)  # a quoted operator is a word
+        out.append("".join(chars))
         delim = (re.findall(r"(?<!<)<<(?!<)-?\s*['\"]?(\w+)", line) or [None])[-1]
     lex = shlex.shlex(";".join(out), posix=True, punctuation_chars=True)
     lex.whitespace_split = True
@@ -44,9 +52,11 @@ def commands(cmd):
 
 
 def why(agent, w):
-    tool, line, ops = w[0].rsplit("/", 1)[-1], " ".join(w), [a for a in w if not a.startswith("-")]
+    tool, line = w[0].rsplit("/", 1)[-1], " ".join(w)
+    ops = [a for i, a in enumerate(w)  # the words, without options and the values of gh's -R/--repo/--hostname
+           if not a.startswith("-") and (w[i - 1] if i else "") not in ("-R", "--repo", "--hostname")]
     if tool == "gh" and (re.search(r"\bpr merge\b", " ".join(ops))
-                         or re.search(r"pulls/\d+/merge", line) and re.search(NON_GET, line)
+                         or re.search(r"pulls/\d+/merge", line) and api_writes(line)
                          or "graphql" in ops and re.search(r"mergePullRequest|enablePullRequestAutoMerge", line)):
         return "merging is divan's; no agent merges"
     args = w[1:]
@@ -58,12 +68,14 @@ def why(agent, w):
                               or any(re.search(r"(^|[:/+])(main|deploy)$", a) for a in pos[1:])):
             return "workers never push to main or deploy; push your branch"
         return "name the destination: `git push origin <branch>`" if sub == "push" and len(pos) < 2 else None
-    reads = (sub == "branch" and set(args[1:]) <= {"-a", "-r", "-v", "-vv", "--list", "--show-current"}
+    filters = {"-l", "--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at"}
+    reads = (sub == "branch" and {a.split("=")[0] for a in args[1:] if a.startswith("-")} <= BRANCH_READ
+             and (not pos or filters & {a.split("=")[0] for a in args[1:]})
              or sub == "remote" and (args[1:] in ([], ["-v"]) or args[1:2] == ["get-url"]))
     if tool == "git" and sub not in GIT_READ and not reads:
         return f"`git {sub}` writes; git is read-only here"
     if tool == "gh" and not (ops[2:3] and ops[2] in GH_READ or ops[1:2] == ["search"] or ops[1:3] == ["auth", "status"]
-                             or ops[1:2] == ["api"] and not re.search(NON_GET, line)):
+                             or ops[1:2] == ["api"] and not api_writes(line)):
         return "gh is read-only here"
     if tool in ("rm", "mv", "cp", "touch", "tee", "mkdir") or tool == "sed" and re.search(r" (-\w*i|--in-pl)", line):
         return f"`{tool}` writes files"
@@ -118,12 +130,14 @@ def test():
     blocked = {
         "manager": ["git commit -m x", "git push origin f", "gh pr create", "rm -rf x", "sed -i s/a/b/ f", "echo x > f",
                     "if true; then rm x; fi", "# clean up\nrm -rf x", "ls # c\ngit commit -m x", "echo 'a #b' && rm x"],
-        "worker": ["gh pr merge 1", "gh api -X PUT repos/o/r/pulls/1/merge", "git push origin main", "git push",
+        "worker": ["gh pr merge 1", "gh pr --repo o/r merge 1", "gh -R o/r pr merge 1",
+                   "gh api -X PUT repos/o/r/pulls/1/merge", "git push origin main", "git push",
                    "# Publish\ngit push origin main", "gh api graphql -f query='mutation{mergePullRequest(x)}'",
                    "git push origin HEAD:deploy", "git push --all origin"],
         "reviewer": ["touch x", "git commit -m x", "cat <<EOF\nx\nEOF\ntouch y", "codex exec x",
                      "codex exec --yolo -s read-only x", "codex exec -s read-only -o f x"],
-        "critic": ["superset browser eval 1", "touch x", "gh pr merge 1"]}
+        "critic": ["superset browser eval 1", "touch x", "gh pr merge 1", "git branch new", "git branch -d x",
+                   "gh api --method GET x -X POST"]}
     allowed = {
         "manager": ["npm test", "python3 -m pytest -q", "claude plugin validate .", "superset agents wait",
                     "git log -3 && git diff --stat", "git status 2>&1 | head", "gh pr view 3 --json state"],
@@ -132,7 +146,9 @@ def test():
         "reviewer": ["codex exec -s read-only - <<'EOF'\nReview a.md.\ngit commit is forbidden.\nEOF", "gh pr list",
                      "git branch --show-current", "git branch -a -v", "git remote -v", "git remote get-url origin"],
         "critic": ["superset browser screenshot --out /tmp/s.png", "superset --json browser list",
-                   "git log --grep '#12'", "echo 'a # b' && ls"]}
+                   "git log --grep '#12'", "echo 'a # b' && ls", "rg '>' README.md", "grep \"a|b\" f",
+                   "git branch --contains HEAD", "git branch --list 'feat/*'", "git branch --merged=main -v",
+                   "gh api --method GET search/issues -f q=x", "gh pr --repo o/r view 1"]}
     assert all(B("divan:" + a, c) for a, cs in blocked.items() for c in cs)
     assert not any(B("divan:" + a, c) for a, cs in allowed.items() for c in cs)
     assert not B("divan:worker", "git status", "s1") and B("general-purpose", "git push origin main", "s1", "a1")
