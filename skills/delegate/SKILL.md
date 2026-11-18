@@ -26,7 +26,7 @@ context is not yours:
 
 ```
 superset ws create --local --project <id> --name <name> --branch <branch> --json \
-  --command "claude --dangerously-skip-permissions --agent divan:manager 'Read your brief at <path> and do it.'"
+  --command "claude --dangerously-skip-permissions -n <manager name> --agent divan:manager 'Read your brief at <path> and do it.'"
 ```
 
 The brief:
@@ -36,12 +36,12 @@ You manage <the work>. Load `manage` and `steer`.
 Charter: <evidence folder>/charter.md. Re-read it at every report.
 Evidence folder: <path>. Briefs go in <path>/briefs/.
 State: <what exists, what is decided>.
-Report to me (<owner session>) by SendMessage: DONE or BLOCKED with evidence per Done-when box,
+Report to me (<owner name>) by SendMessage: DONE or BLOCKED with evidence per Done-when box,
 a decision from the Ask list, or a proposed Changes entry. Nothing else needs me.
 ```
 
 Keep the workspace ID and `terminals[0].terminalId` from its JSON. Subscribe with
-`SendMessage(to: <manager session>, notify_when_idle: true)`; block with `superset agents wait --local
+`SendMessage(to: <manager name>, notify_when_idle: true)`; block with `superset agents wait --local
 --workspace <id> --terminal <id> --until settled`; never a screen poller. A session in another permission mode
 holds the manager's messages for approval: run the owner in the manager's mode, or check each delivery notice.
 
