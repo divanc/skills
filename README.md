@@ -132,9 +132,8 @@ get separate directories instead of clobbering one checkout.
 ## Agents
 
 For the 3-layer setup: you (the owner, with `delegate` and `steer`) → a manager
-→ workers. Each agent says who it is and what it can't do; its tools and
-`hooks/limits.py` enforce what the table lists, and [Gaps](#gaps) names what
-they don't. Workers and the manager run as Paradev sessions (`claude --agent
+→ workers. Tools and `hooks/limits.py` enforce what the table lists, and
+[Gaps](#gaps) names what they don't. Workers and the manager run as Paradev sessions (`claude --agent
 divan:<name>`); the reviewer and critic are the manager's subagents.
 
 Requirements:
@@ -144,14 +143,14 @@ Requirements:
   hook fails closed: without `python3`, Bash, Write, Agent and Workflow calls
   are blocked in every session that loads the plugin.
 - Codex CLI 0.169 or later (`codex exec`, `codex review`), for the reviewer.
-- Owner and manager in the same permission-mode class, with inbound messages
-  allowed; otherwise Claude Code holds or refuses their messages. Check the
-  delivery notice.
+- Owner and manager in the same permission-mode class with inbound messages
+  allowed, or `crossSessionInbound: accept`; otherwise Claude Code holds or
+  refuses their messages. Check the delivery notice.
 
 | agent | does | can't | enforced by |
 |---|---|---|---|
 | manager | briefs workers, verifies, runs checks, steers | edit, commit, merge, fetch, write outside its `briefs/` | tools (no Edit); hook: Write only in the `briefs/` beside `charter.md`; git/gh writes and writing Bash commands blocked |
-| worker | one briefed task in its worktree | merge; push to `main` or `deploy`, or without naming the branch; `add -A`, `commit -a`, `stash` (but `list`, `show`), `checkout .`, `reset --hard`, `clean -f` | hook |
+| worker | one briefed task in its worktree | merge; push to `main` or `deploy`, without a remote and branch, or with options beyond the common ones; `add -A`, `commit -a`, `stash` (but `list`, `show`), `checkout .`, `reset --hard`, `clean -f` | hook |
 | reviewer | scores files with Codex, returns findings | change files; run Codex outside its read-only sandbox | tools; hook |
 | critic | judges what users see against the charter | edit, post, click, `curl` | tools (WebFetch, Slack read-only); hook: the browser only looks |
 
