@@ -69,7 +69,8 @@ CODEX = {  # codex 0.169 subcommand: its allowed flags, True if the flag takes a
     "review": {"-c": True, "--config": True, "--base": True, "--uncommitted": False, "--commit": True, "--title": True}}
 PUSH_FLAGS = {"-u", "--set-upstream", "-f", "--force", "--force-with-lease", "--no-verify", "-n", "--dry-run", "-q", "-v"}
 BROWSER_READ = {"list", "open", "navigate", "screenshot", "console"}
-SEP = {"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"}
+SEP = {"&&", "||", ";", "|", "&", "(", ")", ";;", ";&", ";;&", "|&"}
+OPERATORS = sorted(SEP | {"<", ">", ">>", ">|", "<<", "<<-", "<<<", "<>", "<&", ">&", "&>", "&>>"}, key=len, reverse=True)
 REDIR = set("<>&|")  # `>|` writes too
 OPS, BRACES, STAND_IN = "<>|&;()", "{}", 0xE000  # shell operators, braces; private-use offset for quoted copies
 GLOB = r"[*?\[\]{}]"  # expanded by the shell when unquoted, or a pattern to git
@@ -261,6 +262,19 @@ def substitutions(cmd):
     return out
 
 
+def operators(t):
+    """t split into bash operators if it is a run of operator characters (shlex returns `);` or `)&&` whole),
+    longest match first; any other word as is."""
+    if not t or not set(t) <= set(OPS):
+        return [t]
+    out = []
+    while t:
+        op = next(o for o in OPERATORS if t.startswith(o))  # every single operator character is an operator
+        out.append(op)
+        t = t[len(op):]
+    return out
+
+
 def segments(cmd):
     """Simple commands in cmd as word lists; $(...) and `...` bodies count as commands too."""
     cmd = preprocess(cmd)
@@ -268,7 +282,7 @@ def segments(cmd):
     lex = shlex.shlex(protect(cmd), posix=True, punctuation_chars=True)
     lex.whitespace_split, lex.commenters = True, ""  # comments are already gone
     try:
-        toks = [unprotect(t) for t in lex]
+        toks = [op for t in lex for op in operators(unprotect(t))]
     except ValueError:
         raise Blocked("unbalanced quotes; the hook cannot read the command")
     seg = []
@@ -1028,7 +1042,29 @@ def test():
         assert B("critic", c), c
     os.chdir(here)
     tmp.cleanup()
-    print("ok")
+    # Every operator and grouping, with and without spaces: a forbidden command anywhere in it blocks; benign passes
+    def joined(b, f):
+        forms = [f"({f})", f"( {f} )", f"{{ {f}; }}", f"{{ {f};}}", f"({f});", f"{{ {f}; }};"]
+        for sp in ("", " "):
+            for op in (";", "&", "&&", "||", "|", "|&", "\n"):
+                forms += [f"{b}{sp}{op}{sp}{f}", f"({b}){sp}{op}{sp}{f}", f"{{ {b}; }}{sp}{op}{sp}{f}",
+                          f"{b}{sp}{op}{sp}({f})", f"{b}{sp}{op}{sp}{{ {f}; }}", f"({f}){sp}{op}{sp}{b}",
+                          f"{{ {f}; }}{sp}{op}{sp}{b}", f"{f}{sp}{op}{sp}{b}", f"({b}{sp}{op}{sp}{f})",
+                          f"{b}{sp}{op}{sp}({f}){sp}{op}{sp}{b}"]
+        return forms
+
+    forbidden = {"manager": ["rm victim"], "reviewer": ["touch victim"], "critic": ["touch victim"],
+                 "worker": ["git push origin main"]}
+    cases = 0
+    for a in AGENTS:
+        for f in forbidden[a] + ["gh pr merge 1"]:
+            for c in joined("true", f):
+                assert B(a, c), (a, c)
+                cases += 1
+        for c in joined("true", "ls"):
+            assert not B(a, c), (a, c)
+            cases += 1
+    print(f"ok ({cases} generated operator cases)")
 
 
 if __name__ == "__main__":
