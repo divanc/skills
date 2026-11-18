@@ -31,8 +31,9 @@ Never report to the user before you have the agent's result.
 Workers are Paradev sessions running `divan:worker`. The agent holds the limits; the brief holds the task:
 
 ```
-superset ws create --local --project <id> --name <name> --branch <branch> --json \
-  --command "claude --dangerously-skip-permissions -n <task> --agent divan:worker 'Read your brief at <path> and do it.'"
+superset ws create --local --project <id> --name <name> --branch <branch> --base-branch <PR branch> \
+  --skip-branch-prefix --json \
+  --command "claude --dangerously-skip-permissions -n <task> --agent divan:worker 'Read your brief at <path>, check your starting commit against its State, and do it.'"
 ```
 
 `-n <task>` is the session name `ListAgents` shows and `SendMessage` takes. No quotes in the prompt; the
