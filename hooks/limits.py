@@ -35,15 +35,15 @@ SHELLS = ("sh", "bash", "zsh", "dash", "ksh", "fish")
 RISKY_ENV = r"^(GIT_\w*|PAGER|EDITOR|VISUAL|BASH_ENV|ENV|PATH|LESSOPEN|LESSCLOSE|LD_\w+|DYLD_\w+)="  # change what runs
 PREFIX_WORDS = {"if", "then", "else", "elif", "while", "until", "do", "!", "{"}  # shell words before a command
 END_WORDS = {"fi", "done", "}"}
-SHORT_VALUES = {"commit": "mFcCtSu", "checkout": "bB", "switch": "cC", "clean": "e", "restore": "s"}  # take a value
+SHORT_VALUES = {"commit": "mFcCtS?u?", "checkout": "bB", "switch": "cC", "clean": "e", "restore": "s"}  # `?`: optional
 LONG_VALUES = {  # git long options that take the next word as their value
     "commit": ("--message", "--file", "--author", "--date", "--template", "--reuse-message", "--reedit-message",
                "--fixup", "--squash", "--cleanup", "--trailer", "--pathspec-from-file"),
     "checkout": ("--orphan", "--conflict", "--pathspec-from-file"), "switch": ("--create", "--force-create", "--orphan"),
     "clean": ("--exclude",), "add": ("--chmod", "--pathspec-from-file"), "restore": ("--source", "--pathspec-from-file")}
 SWEEP_PATHS = {".", ":/", ":", "*", ":/*"}  # pathspecs that take the whole tree
-READER_OPTS = {  # read tools: (short letters that take a value, long options that take the next word)
-    "sed": ("efl", ("--expression", "--file", "--line-length")),
+READER_OPTS = {  # read tools: (short letters that take a value, `?` if optional; long options that take the next word)
+    "sed": ("efli?", ("--expression", "--file", "--line-length")),
     "sort": ("ktoST", ("--key", "--field-separator", "--temporary-directory", "--buffer-size", "--parallel",
                        "--files0-from", "--random-source", "--compress-program", "--batch-size", "--output")),
     "tree": ("LPIoHT", ("--charset", "--filelimit", "--timefmt", "--sort")),
@@ -51,8 +51,8 @@ READER_OPTS = {  # read tools: (short letters that take a value, long options th
     "rg": ("efgtTABCmMjE", ("--regexp", "--file", "--glob", "--type", "--type-not", "--max-count", "--context",
                             "--before-context", "--after-context", "--threads", "--encoding")),
     "file": ("mefFP", ("--magic-file", "--exclude", "--separator", "--files-from", "--parameter")),
-    "date": ("dfrsI", ("--date", "--file", "--reference")),
-    "git grep": ("efABCmO", ("--max-depth", "--threads", "--max-count", "--context", "--before-context",
+    "date": ("dfrsI?", ("--date", "--file", "--reference")),
+    "git grep": ("efABCmO?", ("--max-depth", "--threads", "--max-count", "--context", "--before-context",
                              "--after-context"))}
 RUNS_OR_WRITES = {"rg": ("", ("--pre",)), "sort": ("", ("--compress-program",)), "file": ("C", ("--compile",)),
                   "date": ("s", ("--set",)), "git grep": ("O", ("--open-files-in-pager",))}  # run a program or change state
@@ -188,7 +188,7 @@ def unbrace(t):
 
 
 def backtick_end(cmd, i):
-    """Index of the backtick closing one whose body starts at i; quotes inside it block (bash reads them oddly)."""
+    """Index of the backtick closing one whose body starts at i; quotes inside it block."""
     while i < len(cmd) and cmd[i] != "`":
         if cmd[i] in "'\"":
             raise Blocked("quotes inside backticks; use $(...)")
@@ -309,7 +309,7 @@ def read_options(tool, w, table):
         elif a in table:
             take = 1 + table[a]
         else:
-            letters, value_next = cluster(a, lambda c: table.get(a[0] + c) == 1)
+            letters, value_next = cluster(a, "".join(k[1:] for k, n in table.items() if n == 1 and len(k) == 2 and k[0] == a[0]))
             if any(a[0] + c not in table for c in letters):
                 raise Blocked(f"`{tool} {a}` is an option the hook does not know")
             take = 1 + value_next
@@ -390,12 +390,13 @@ def git_commands():
     return frozenset(out.split())
 
 
-def cluster(a, takes_value):
+def cluster(a, values):
     """(letters, value is the next word) of a short-option cluster, read as git and getopt read it: letters until one
-    that takes a value, which takes the rest of the cluster (`-mfix`), or the next word when it is last (`-am`)."""
+    in `values`, which takes the rest of the cluster (`-mfix`), or the next word when it is last (`-am`). A letter
+    followed by `?` in `values` takes an optional value: only an attached one, never the next word (`-S`, `-u`)."""
     for j, c in enumerate(a[1:], 1):
-        if takes_value(c):
-            return a[1:j + 1], j == len(a) - 1
+        if c.isalnum() and c in values:
+            return a[1:j + 1], j == len(a) - 1 and values[values.index(c) + 1:][:1] != "?"
     return a[1:], False
 
 
@@ -420,7 +421,7 @@ def split_args(args, values="", long_values=()):
             longs.append(a)
             i += 1 + ("=" not in a and long_opt([a], *long_values))
         elif re.match(r"^-[a-zA-Z]", a):
-            letters, value_next = cluster(a, lambda c: c in values)
+            letters, value_next = cluster(a, values)
             short |= set(letters)
             i += 1 + value_next
         else:
@@ -1013,6 +1014,13 @@ def test():
     assert B("manager", "cat <<EOF\n$\\\n(rm x)\nEOF") and not B("manager", "cat <<'EOF'\n$\\\n(rm x)\nEOF")
     assert not B("manager", "cat <<EOF\na \\\\\nEOF")  # an escaped backslash ends the line: no join
     assert not B("manager", "cat <<'EOF'\nx\\\nEOF\nls")  # quoted: a trailing backslash is data
+    # Optional values (-S[keyid], -u[mode], -I[fmt], -O[pager], -i[suffix]) are attached only, never the next word
+    for c in ("git commit -u -a -m fix", "git commit -S -a -m fix", "git commit -uno -a"):
+        assert B("worker", c), c
+    assert not B("worker", "git commit -Sa -m fix") and not B("worker", "git commit -m -a")  # -Sa: key `a`
+    for a in ("manager", "reviewer", "critic"):
+        assert B(a, "date -I -s 2030-01-01") and not B(a, "date -Iseconds") and B(a, "git grep -O -e x"), a
+    assert B("manager", "sed -i -e s/a/b/ f") and B("manager", "sed -in s/a/b/ f")
     here = os.getcwd()
     os.chdir(ev)  # relative paths would resolve inside the evidence folder; they block anyway
     for c in ("superset browser screenshot --out shot.png", "superset browser screenshot --out ./s.png",
