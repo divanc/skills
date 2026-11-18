@@ -26,21 +26,52 @@ CODEX = {  # codex 0.169 subcommand: its allowed flags, True if the flag takes a
     "exec": {"-s": True, "--sandbox": True, "-c": True, "--config": True, "-C": True, "--cd": True, "-m": True,
              "--model": True, "--skip-git-repo-check": False, "--ephemeral": False, "--json": False},
     "review": {"-c": True, "--config": True, "--base": True, "--uncommitted": False, "--commit": True, "--title": True}}
+PUSH_FLAGS = {"-u", "--set-upstream", "-f", "--force", "--force-with-lease", "--no-verify", "-n", "--dry-run", "-q", "-v"}
 BROWSER_READ = {"list", "open", "navigate", "screenshot", "console"}
 SEP = {"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"}
 REDIR = set("<>&|")  # `>|` writes too
+OPS, STAND_IN = "<>|&;()", 0xE000  # shell operator characters; private-use offset for their quoted copies
 AGENTS = ("manager", "worker", "reviewer", "critic")
 SESSIONS = os.path.join(os.environ.get("TMPDIR", "/tmp"), "divan-limits")  # session_id -> its main thread's agent
+
+
+def protect(cmd):
+    """cmd with quoted or escaped operator characters swapped for private-use stand-ins, so `grep ">" f` keeps `>`
+    a word: shlex alone drops the quotes and returns a bare `>`."""
+    out, q, i = [], None, 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if q != "'" and ch == "\\" and i + 1 < len(cmd):
+            nxt = cmd[i + 1]
+            out.append(ch + (chr(STAND_IN + ord(nxt)) if nxt in OPS else nxt))
+            i += 2
+            continue
+        if q is None and ch in "'\"":
+            q = ch
+        elif ch == q:
+            q = None
+        elif q and ch in OPS:
+            ch = chr(STAND_IN + ord(ch))
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def unprotect(t):
+    """Stand-ins back to their characters, except in a token made only of them: a quoted operator stays a word."""
+    if t and all(ord(ch) >= STAND_IN for ch in t):
+        return t
+    return "".join(chr(ord(ch) - STAND_IN) if ord(ch) >= STAND_IN else ch for ch in t)
 
 
 def segments(cmd):
     """Simple commands in cmd as word lists; $(...) and `...` bodies count as commands too."""
     out = []
     for c in [cmd] + [a or b for a, b in re.findall(r"\$\(([^()]*)\)|`([^`]*)`", cmd)]:
-        lex = shlex.shlex(c.replace("\n", " ; "), posix=True, punctuation_chars=True)
+        lex = shlex.shlex(protect(c.replace("\n", " ; ")), posix=True, punctuation_chars=True)
         lex.whitespace_split = True
         try:
-            toks = list(lex)
+            toks = [unprotect(t) for t in lex]
         except ValueError:
             toks = c.split()
         seg = []
@@ -232,9 +263,12 @@ def worker(w):
     a, _ = git_args(w)
     sub, rest = (a or [""])[0], a[1:]
     pos = [x for x in rest if not x.startswith("-")]
-    if sub == "push":
-        if {"--all", "--mirror"} & set(rest) or any(
-                x in (":", "+:") or "*" in x or re.search(r"(^|[:/+])(main|deploy)$", x) for x in pos[1:]):
+    if sub == "push":  # allowlist: git push [flags] <remote> <refspec>...
+        bad = [x for x in rest if x.startswith("-") and x not in PUSH_FLAGS and not x.startswith("--force-with-lease=")
+               and not re.match(r"^-[ufnqv]+$", x)]
+        if bad:
+            return f"`{bad[0]}` is not allowed; push as `git push [-u] [--force-with-lease] origin <branch>`"
+        if any(x in (":", "+:") or "*" in x or re.search(r"(^|[:/+])(main|deploy)$", x) for x in pos[1:]):
             return "workers never push to main or deploy; push your branch"
         if len(pos) < 2 or any(re.match(r"^\+?(HEAD|@)$", x) for x in pos[1:]):  # the destination comes from config
             return "name the destination: `git push origin <branch>`"
@@ -431,6 +465,19 @@ def test():
                 assert B(a, f.format(sh, "gh pr merge 1")), (a, f, sh)
             assert B("worker", f.format(sh, "git push origin main")) and B("manager", f.format(sh, "rm f")), (f, sh)
     assert shell_command(["bash", "script.sh"]) is None and not B("manager", "bash -c -- 'ls'")
+    for c in ("git push --repo=x origin feat", "git push -o ci.skip origin feat", "git push --push-option=x origin feat",
+              "git push --tags origin feat", "git push --prune origin feat", "git push --delete origin feat",
+              "git push --mirror origin", "git push --all origin", "git push --force-if-includes origin feat",
+              "git push origin feat main", "git push origin feat '*'", "git push -fu origin HEAD"):
+        assert B("worker", c), c
+    for c in ("git push -u origin feat", "git push --force-with-lease=feat:abc origin feat", "git push -fu origin feat",
+              "git push --no-verify --dry-run -q -v origin feat other", "git push --set-upstream origin feat"):
+        assert not B("worker", c), c
+    for a in ("manager", "reviewer", "critic"):
+        for c in ('grep ">" README.md', "grep '>' f | head", "echo \\> x", "grep 'a > b' f", 'bash -c \'grep ">" f\''):
+            assert not B(a, c), (a, c)
+        for c in ("grep x > f", "grep '>' f > out", 'bash -c \'grep ">" f > out\'', "grep x '>'> f"):
+            assert B(a, c), (a, c)
     tmp.cleanup()
     print("ok")
 
