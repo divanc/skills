@@ -8,7 +8,10 @@ import json, re, shlex, subprocess, sys
 
 READ = {"git", "gh", "ls", "cat", "head", "tail", "wc", "rg", "grep", "jq", "pwd", "echo", "printf", "date", "diff",
         "stat", "file", "tree", "sort", "uniq", "cut", "which", "true", "cd", "find", "test", "["}
-EXTRA = {"manager": {"superset", "paradev"}, "reviewer": {"codex"}, "critic": {"superset", "paradev", "curl"}}
+EXTRA = {"reviewer": {"codex"}, "critic": {"superset", "paradev", "curl"}}
+# ponytail: the manager is on a denylist so it can re-run checks; a crafted script still gets past it.
+WRITE = {"rm", "rmdir", "mv", "cp", "touch", "tee", "mkdir", "ln", "chmod", "chown", "dd", "truncate", "install", "rsync"}
+WRAP = {"env", "xargs", "sudo", "nohup", "time", "command", "exec", "nice"}
 GIT_READ = {"status", "log", "diff", "show", "rev-parse", "ls-files", "grep", "blame", "fetch", "describe",
             "shortlog", "cat-file", "ls-tree", "merge-base", "rev-list", "worktree", "branch", "remote"}
 GH_READ = {"view", "list", "diff", "checks", "status", "watch"}
@@ -52,9 +55,17 @@ def git_args(w):
     return w[i:], path
 
 
-def read_only(agent, w):
+def writes(agent, w):
+    """Why the simple command w writes, or None. Manager: denylist; reviewer and critic: allowlist."""
     tool, line = w[0].rsplit("/", 1)[-1], " ".join(w)
-    if tool not in READ | EXTRA.get(agent, set()):
+    if agent == "manager":
+        if tool in ("sh", "bash", "zsh") and "-c" in w[:-1]:
+            return next(filter(None, (writes(agent, s) for s in segments(w[w.index("-c") + 1]))), None)
+        if tool in WRITE or tool in WRAP and WRITE & set(w):
+            return f"`{tool}` writes files" if tool in WRITE else f"`{tool}` runs {'/'.join(sorted(WRITE & set(w)))}"
+        if tool == "sed" and any(a.startswith("-i") or a == "--in-place" for a in w):
+            return "sed -i edits files"
+    elif tool not in READ | EXTRA[agent]:
         return f"`{tool}` is not on the {agent}'s read-only list"
     if redirects_to_file(w):
         return "output redirect to a file"
@@ -67,7 +78,9 @@ def read_only(agent, w):
     if tool == "git":
         a, _ = git_args(w)
         sub, rest = (a or [""])[0], a[1:]
-        if (sub not in GIT_READ or "-c" in w[1:len(w) - len(a)] or sub == "worktree" and rest[:1] != ["list"]
+        if "-c" in w[1:len(w) - len(a)]:
+            return "`git -c` can make git run any program"
+        if (sub not in GIT_READ or sub == "worktree" and rest[:1] != ["list"]
                 or sub in ("branch", "remote") and any(not r.startswith("-") or r in ("-d", "-D", "-m", "-M", "-f")
                                                        for r in rest)):
             return f"`git {sub}` writes; git is read-only here"
@@ -118,9 +131,9 @@ def check(event):
             if pushes_protected(w, event.get("cwd", ".")):
                 return "workers never push to main or deploy; push your branch"
         else:
-            why = read_only(agent, w)
+            why = writes(agent, w)
             if why:
-                return f"{agent} is read-only: {why}"
+                return f"{agent} writes nothing: {why}"
     return None
 
 
@@ -140,8 +153,14 @@ def test():
     assert not B("manager", "grep 'a|b' f; echo 'x > y'; git branch -a")
     assert B("manager", "git commit -m x") and B("manager", "gh pr create") and B("manager", "echo x > f")
     assert B("manager", 'echo "$(rm -rf /)"') and B("manager", "git branch -D x") and B("manager", "ls\nrm f")
-    assert B("manager", "git diff --output=x") and B("manager", "sort -o x y") and B("manager", "sed -n 'w x' y")
+    assert B("manager", "git diff --output=x") and B("manager", "sort -o x y") and B("reviewer", "sed -n 'w x' y")
     assert B("manager", "git -c core.pager='rm x' log")
+    for c in ("rm -rf x", "touch f", "mkdir d", "sed -i s/a/b/ f", "cp a b", "find . -delete", "ls | xargs rm",
+              "bash -c 'rm x'", "dd if=/dev/zero of=f", "npm test > out.txt", "python3 -m pytest | tee log"):
+        assert B("manager", c), c
+    for c in ("npm test", "python3 -m pytest -q", "claude plugin validate .", "python3 hooks/limits.py --test 2>&1"):
+        assert not B("manager", c), c
+    assert B("reviewer", "python3 -m pytest") and B("critic", "npm test")
     assert not B("manager", "superset agents wait --until settled 2>/dev/null")
     assert not B("reviewer", 'codex review --base main -c sandbox_mode="read-only"')
     assert B("reviewer", "codex exec --full-auto x") and B("reviewer", "codex exec x") and B("reviewer", "superset ws delete 1")

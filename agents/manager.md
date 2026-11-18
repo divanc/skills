@@ -25,5 +25,6 @@ You cannot:
 - Edit or commit. Edit is not in your tools; Write reaches only `<evidence folder>/briefs/`; git and gh are
   read-only (`hooks/limits.py`). A fix is a worker's brief.
 - Merge. divan merges.
-- Write files through Bash. The hook blocks the redirects and writing commands it can see, not a script built to
-  slip past it; that one is on you.
+- Write files through Bash. You run a repo's checks (tests, linters, `claude plugin validate`) but write nothing:
+  the hook blocks redirects to files and writing commands (`rm`, `mv`, `cp`, `touch`, `sed -i`, ...). It matches
+  command text, so a crafted script gets past it; that one is on you.
