@@ -12,13 +12,14 @@ GIT_READ = {"status", "log", "diff", "show", "blame", "grep", "ls-files", "ls-tr
 GH_READ = {"view", "list", "diff", "checks", "status", "watch"}
 LIST_FILTERS = {"-l", "--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at"}
 TAKES_VALUE = {"--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"}
-BRANCH_READ = LIST_FILTERS | TAKES_VALUE | {"-a", "-r", "-v", "-vv", "--show-current"}
+BRANCH_READ = LIST_FILTERS | TAKES_VALUE | {"-a", "-r", "-v", "-vv", "-i", "--show-current", "--color", "--no-color",
+                                           "--column", "--no-column", "--abbrev", "--no-abbrev", "--ignore-case"}
 
 
-def api_writes(line):
+def api_writes(line, graphql):
     """True if a `gh api` call writes: a GraphQL mutation or unseen --input; else an explicit non-GET method, else a
     field (which implies POST)."""
-    if re.search(r"\bgraphql\b", line):
+    if graphql:
         return bool(re.search(r"\bmutation\b|--input", line))
     method = re.findall(r"(?:-X|--method)[ =]?([A-Za-z]+)", line)
     return method[-1].upper() != "GET" if method else bool(re.search(r"\s(-f|-F|--field|--raw-field|--input)\b", line))
@@ -61,9 +62,10 @@ def why(agent, w):
     tool, line = w[0].rsplit("/", 1)[-1], " ".join(w)
     ops = [a for i, a in enumerate(w)  # the words, without options and the values of gh's -R/--repo/--hostname
            if not a.startswith("-") and (w[i - 1] if i else "") not in ("-R", "--repo", "--hostname")]
+    graphql = tool == "gh" and ops[1:3] == ["api", "graphql"]  # the endpoint argument, not the word anywhere
     if tool == "gh" and (re.search(r"\bpr merge\b", " ".join(ops))
-                         or re.search(r"pulls/\d+/merge", line) and api_writes(line)
-                         or "graphql" in ops and re.search(r"mergePullRequest|enablePullRequestAutoMerge", line)):
+                         or re.search(r"pulls/\d+/merge", line) and api_writes(line, False)
+                         or graphql and re.search(r"mergePullRequest|enablePullRequestAutoMerge", line)):
         return "merging is divan's; no agent merges"
     args = w[1:]
     while tool == "git" and args and args[0].startswith("-"):  # skip git's -C/-c <value> and other global options
@@ -81,7 +83,7 @@ def why(agent, w):
              or sub in ("stash", "worktree") and args[1:2] == ["list"] or sub == "stash" and args[1:2] == ["show"]
              or sub == "tag" and (not args[1:] or {"-l", "--list"} & set(args))
              or sub == "reflog" and args[1:2] in ([], ["show"])
-             or sub == "remote" and (args[1:] in ([], ["-v"]) or args[1:2] == ["get-url"])
+             or sub == "remote" and (args[1:] in ([], ["-v"]) or args[1:2] in (["get-url"], ["show"]))
              or sub == "config" and (args[1:2] in (["get"], ["list"])
                                      or {"--get", "--get-all", "--list", "-l", "--get-regexp"} & set(args)))
     if tool == "git" and (sub not in GIT_READ and not reads
@@ -89,7 +91,7 @@ def why(agent, w):
         return f"`git {sub}` writes; git is read-only here"
     if tool == "gh" and not (ops[2:3] and ops[2] in GH_READ or ops[1:2] == ["search"] or ops[1:] == ["status"]
                              or ops[1:3] == ["auth", "status"]
-                             or ops[1:2] == ["api"] and not api_writes(line)):
+                             or ops[1:2] == ["api"] and not api_writes(line, graphql)):
         return "gh is read-only here"
     if tool in ("rm", "mv", "cp", "touch", "tee", "mkdir") or tool == "sed" and re.search(r" (-\w*i|--in-pl)", line):
         return f"`{tool}` writes files"
@@ -156,6 +158,7 @@ def test():
                    "gh api --method GET x -X POST", "git branch --sort x new", "git branch -v new-branch",
                    "git remote add x u", "git stash", "git worktree add ../x", "git tag v1",
                    "gh api graphql -f query='mutation { addComment(x) }'", "gh api graphql --input q.json",
+                   "gh api repos/o/r/issues -f title='Fix graphql issue'", "git branch --no-color new",
                    "git log --output=f", "git diff --outp f", "git config user.name x",
                    "git config --unset user.name", "git config set user.name x"]}
     allowed = {
@@ -164,7 +167,8 @@ def test():
         "worker": ["git push -u origin feat-x", "git push origin feature/main fix/deploy", "rm -rf build",
                    "git push origin \\\nfeature", "git commit -m \"$(cat <<'EOF'\nfix: it's done\nEOF\n)\""],
         "reviewer": ["codex exec -s read-only - <<'EOF'\nReview a.md.\ngit commit is forbidden.\nEOF", "gh pr list",
-                     "git branch --show-current", "git branch -a -v", "git remote -v", "git remote get-url origin"],
+                     "git branch --show-current", "git branch -a -v", "git remote -v", "git remote get-url origin",
+                     "git branch --no-color --column -i", "git branch --abbrev=7 -v", "git remote show origin"],
         "critic": ["superset browser screenshot --out /tmp/s.png", "superset --json browser list",
                    "git log --grep '#12'", "echo 'a # b' && ls", "rg '>' README.md", "grep \"a|b\" f",
                    "git branch --contains HEAD", "git branch --list 'feat/*'", "git branch --merged=main -v",
