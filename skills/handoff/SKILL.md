@@ -79,8 +79,9 @@ Then, in order:
 
 1. SendMessage the old manager: `TOOK OVER`, plus any mismatch. Not in `ListAgents`: skip this, and say so
    in step 2.
-2. SendMessage the owner: "I manage <work> now, taking over from `<old name>`; state in <handoff path>."
-   The owner replies to the name on that message.
+2. SendMessage the owner: "I manage <work> now, taking over from `<old name>`; workspace
+   $SUPERSET_WORKSPACE_ID, terminal $SUPERSET_TERMINAL_ID; state in <handoff path>." The owner replies to
+   the name on that message.
 3. SendMessage every live worker: "Your manager is now `<your name>`; send DONE or BLOCKED here." Their
    briefs name the old manager.
 4. Re-subscribe `notify_when_idle` on each worker. Subscriptions die with the session that made them.

@@ -90,17 +90,15 @@ Steer re-reads the charter and runs five guard
 checks — goal, evidence over claims, rules, drift, decisions that belong to the
 user — then one improve check: what the user will ask for next.
 
-- Output: continue, correct, improve, or escalate.
+- Output: continue, correct, or escalate, plus an optional improve line.
 - Every correction quotes the charter line it rests on, or the repo rule
   (check 3) or the brief (check 4); nothing to quote, no correction.
 - At most one idea per report; small ones done now, bigger ones go to the user.
 
 ### handoff
 
-Replaces a manager whose context is filling.
-
-Past 60% context the manager writes the state to a file, starts a fresh manager from it, and closes
-once the new one confirms.
+Past 60% context the manager writes the state to a file, starts a fresh manager
+from it, and closes once the new one confirms.
 
 - **State file** — task table with IDs, rules in force, what's left, where things live.
 - **Verify first** — the new manager checks the file against live terminals and
@@ -153,7 +151,7 @@ Requirements:
 | agent | does | can't | enforced by |
 |---|---|---|---|
 | manager | briefs workers, verifies, runs checks, steers | edit, commit, merge, fetch, write outside its `briefs/` | tools (no Edit); hook: Write only in the `briefs/` beside `charter.md`; git, gh and writing Bash commands blocked |
-| worker | one briefed task in its worktree | merge; push to `main` or `deploy`, or without naming the branch; `add -A`, `commit -a`, `stash`, `checkout .`, `reset --hard`, `clean -f` | hook |
+| worker | one briefed task in its worktree | merge; push to `main` or `deploy`, or without naming the branch; `add -A`, `commit -a`, `stash` (but `list`, `show`), `checkout .`, `reset --hard`, `clean -f` | hook |
 | reviewer | scores files with Codex, returns findings | change files; run Codex outside its read-only sandbox | tools; hook |
 | critic | judges what users see against the charter | edit, post, click, `curl` | tools (WebFetch, Slack read-only); hook: the browser only looks |
 

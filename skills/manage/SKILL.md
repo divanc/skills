@@ -53,13 +53,12 @@ Reviewers and critics are your subagents: the `Agent` tool with `subagent_type` 
 ```
 
 After a context summary, the board, the commits and the charter are enough to resume. Each brief's `State` line
-is copied from it; writing that line from memory means you skipped step 5. Past 60% context, run
-`handoff` before the summary comes.
+is copied from it; writing that line from memory means you skipped step 5. Under a charter, past 60%
+context, run `handoff` before the summary comes.
 
 ## Finish signals
 
-Every brief ends with the report envelope below, so the worker's last action, a `SendMessage` to you,
-is the signal.
+Every brief ends with the report envelope below; the worker's DONE or BLOCKED message is the signal.
 
 At launch, subscribe with `SendMessage(to: <task>, notify_when_idle: true)` and no message. To block on
 one worker, `superset agents wait --local --workspace <id> --terminal <id> --until settled`. Both are
@@ -90,7 +89,8 @@ Traps: <the ones you know>.
 Rules: stage explicit paths; never `git add -A`, `git add .`, `git commit -a`. Never `git stash`,
 `git checkout .` or a pathless `git restore` — the stash stack is shared by every worktree, and the
 checkout may be; compare with `git worktree` or `git show HEAD:path`. Commit only on your branch. Kill
-every process you start and report the count. Use a free port and name it. Work on a copy of any real database (`cp -c`), never the live one.
+every process you start and report the count. Use a free port and name it. Work on a copy of any real
+database (`cp -c`), never the live one.
 If something outside your files must change, stop and report — do not change it.
 The user approved this direction — decide and act, do not defer.
 Verify: <commands>. Paste the real output.
@@ -139,9 +139,10 @@ lost at the next summary.
 ### The reviewer loop
 
 Every PR, before it goes up. Each round is a fresh `Agent` call to `divan:reviewer` (it runs Codex),
-given the changed files and the charter's Great, not the writer's report or reasoning. It returns
-`score: N/10` per file with findings. Below 10, the findings go to the worker and a new reviewer scores
-the fix. Stop at 10/10 on every file; quote the final verdict in the PR.
+given the changed files and the charter's Great (without a charter, the agreed acceptance criteria), not
+the writer's report or reasoning. It returns `score: N/10` per file with findings. Below 10, the findings
+go to the worker and a new reviewer scores the fix. Stop at 10/10 on every file; quote the final verdict
+in the PR.
 
 ### The critic
 
