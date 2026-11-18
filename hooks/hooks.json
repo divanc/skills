@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Agent|Workflow",
+        "hooks": [
+          {"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}\"/hooks/limits.py", "onFailure": "block"}
+        ]
+      }
+    ]
+  }
+}
