@@ -44,7 +44,8 @@ At launch, subscribe with `SendMessage(to: <worker session>, notify_when_idle: t
 session is the new `ListAgents` row named after its workspace. To block on one worker, `superset agents
 wait --workspace <id> --terminal <id> --until settled`. Both are wake-ups, not proof of done: a worker
 running nested `claude -p` sessions settles on their stops. Woken without a DONE or BLOCKED, read its
-screen (`superset terminals read`). The notice is one-shot; re-subscribe.
+screen (`superset terminals read`). The notice is one-shot and arrives only after your turn ends;
+re-subscribe.
 
 **The board** — reprinted whenever a phase lands or the user asks:
 
