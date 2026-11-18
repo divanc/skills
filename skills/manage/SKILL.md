@@ -58,8 +58,8 @@ is copied from it; writing that line from memory means you skipped step 5. Past 
 
 ## Finish signals
 
-A done you don't see costs the worker's idle time and yours. Every brief ends with the report envelope
-below, so the worker's last action, a `SendMessage` to you, is the signal.
+Every brief ends with the report envelope below, so the worker's last action, a `SendMessage` to you,
+is the signal.
 
 At launch, subscribe with `SendMessage(to: <task>, notify_when_idle: true)` and no message. To block on
 one worker, `superset agents wait --local --workspace <id> --terminal <id> --until settled`. Both are
@@ -88,9 +88,9 @@ Yours: <files>. Not yours: <files, and whose>.
 Out of scope: <list> — that is phase <M>.
 Traps: <the ones you know>.
 Rules: stage explicit paths; never `git add -A`, `git add .`, `git commit -a`. Never `git stash`,
-`git checkout .` or a pathless `git restore` — the checkout is shared; compare with `git worktree`
-or `git show HEAD:path`. Commit only on your branch. Kill every process you start and report the
-count. Use a free port and name it. Work on a copy of any real database (`cp -c`), never the live one.
+`git checkout .` or a pathless `git restore` — the stash stack is shared by every worktree, and the
+checkout may be; compare with `git worktree` or `git show HEAD:path`. Commit only on your branch. Kill
+every process you start and report the count. Use a free port and name it. Work on a copy of any real database (`cp -c`), never the live one.
 If something outside your files must change, stop and report — do not change it.
 The user approved this direction — decide and act, do not defer.
 Verify: <commands>. Paste the real output.

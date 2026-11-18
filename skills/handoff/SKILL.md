@@ -68,8 +68,8 @@ From launch, act on nothing. Two managers on one board give conflicting orders.
 Read the handoff file in full, then the charter. The file is a claim written from a full context. Before
 acting, check each row against the world:
 
-- `superset terminals list --local --workspace <id>` per task: the terminal is alive, the agent is where the file
-  says.
+- `superset terminals list --local --workspace <id>` per task: the terminal is alive, the agent is where
+  the file says.
 - `gh pr list`, `git log` per branch: what is open, what is committed.
 - Anything the file says is running (a review, a deploy): look at it.
 
@@ -99,5 +99,5 @@ No `TOOK OVER` by the time this returns:
 superset agents wait --local --workspace $SUPERSET_WORKSPACE_ID --terminal <new> --until settled
 ```
 
-read its screen (`superset terminals read --local --workspace $SUPERSET_WORKSPACE_ID --terminal <new>`), fix
-what stopped it, relaunch.
+read its screen (`superset terminals read --local --workspace $SUPERSET_WORKSPACE_ID --terminal <new>`).
+Alive and working: send it what it lacks. Failed: close its terminal, then relaunch.

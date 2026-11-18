@@ -91,8 +91,8 @@ checks — goal, evidence over claims, rules, drift, decisions that belong to th
 user — then one improve check: what the user will ask for next.
 
 - Output: continue, correct, improve, or escalate.
-- Every correction quotes the charter line it rests on; nothing to quote, no
-  correction.
+- Every correction quotes the charter line it rests on, or the repo rule
+  (check 3) or the brief (check 4); nothing to quote, no correction.
 - At most one idea per report; small ones done now, bigger ones go to the user.
 
 ### handoff
