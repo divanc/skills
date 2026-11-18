@@ -22,6 +22,10 @@ GH_VALUE = {"-R", "--repo", "--hostname", "-X", "--method", "-H", "--header", "-
             "--input", "-q", "--jq", "-t", "--template", "--json", "-b", "--body", "--title", "-L", "--limit"}
 BRANCH_READ = {"-a", "-r", "-v", "-vv", "--list", "--show-current", "--contains", "--merged", "--no-merged"}
 BRANCH_PATTERN = {"--list", "--contains", "--merged", "--no-merged"}  # options that take a pattern or commit
+CODEX = {  # codex 0.169 subcommand: its allowed flags, True if the flag takes a value
+    "exec": {"-s": True, "--sandbox": True, "-c": True, "--config": True, "-C": True, "--cd": True, "-m": True,
+             "--model": True, "--skip-git-repo-check": False, "--ephemeral": False, "--json": False},
+    "review": {"-c": True, "--config": True, "--base": True, "--uncommitted": False, "--commit": True, "--title": True}}
 BROWSER_READ = {"list", "open", "navigate", "screenshot", "console"}
 SEP = {"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"}
 REDIR = set("<>&|")  # `>|` writes too
@@ -126,15 +130,32 @@ def gh_words(w):
 
 
 def codex_read_only(w):
-    sub = (w[1:2] or [""])[0]
-    if any(a.startswith("--dangerously") or a in ("--full-auto", "-p", "--profile") for a in w):
+    """True if w is `codex exec` or `codex review` with only allowlisted flags and every sandbox setting read-only."""
+    sub = {"e": "exec"}.get((w[1:2] or [""])[0], (w[1:2] or [""])[0])
+    flags, sandbox, pos, i = CODEX.get(sub), [], [], 2
+    if flags is None:
         return False
-    if any(v.startswith("sandbox") and v != "sandbox_mode=read-only" for v in option_values(w, "-c", "--config")):
+    while i < len(w):
+        a = w[i]
+        if a == "-" or not a.startswith("-"):
+            pos.append(a)
+            i += 1
+            continue
+        name, eq, val = a.partition("=")
+        if name not in flags and a[:2] in flags and not a.startswith("--"):  # attached short: -sread-only
+            name, eq, val = a[:2], "=", a[2:]
+        if name not in flags:
+            return False
+        if flags[name] and not eq:
+            val, i = (w[i + 1] if i + 1 < len(w) else ""), i + 1
+        if name in ("-s", "--sandbox"):
+            sandbox.append("sandbox_mode=" + val)
+        elif name in ("-c", "--config"):
+            sandbox.append(val)  # the only -c allowed is sandbox_mode=read-only
+        i += 1
+    if sub == "exec" and pos[:1] and pos[0] in ("resume", "fork", "review", "help"):
         return False
-    if sub in ("exec", "e"):
-        modes = option_values(w, "-s", "--sandbox")
-        return bool(modes) and set(modes) == {"read-only"}
-    return sub == "review" and "sandbox_mode=read-only" in option_values(w, "-c", "--config")
+    return set(sandbox) == {"sandbox_mode=read-only"}
 
 
 def reader(agent, w):
@@ -173,7 +194,8 @@ def reader(agent, w):
         elif not (verb in GH_READ or noun == "search" or (noun, verb) == ("auth", "status")):
             return f"`gh {noun} {verb}` writes; gh is read-only here"
     if tool == "codex" and not codex_read_only(w):
-        return "codex runs only in its read-only sandbox: `exec -s read-only` or `review -c sandbox_mode=\"read-only\"`"
+        return ("codex runs only as `exec -s read-only` or `review -c sandbox_mode=\"read-only\"`, "
+                "with the flags the reviewer uses (no -o, --yolo, --add-dir, ...)")
     if tool in ("superset", "paradev") and agent == "critic" and (w[1:2] != ["browser"] or (w[2:3] or [""])[0] not in BROWSER_READ):
         return "the critic uses only `superset browser list|open|navigate|screenshot|console`"
     if tool == "curl" and (set("XdFTOo") & ({a[1] for a in w[1:] if re.match(r"^-[a-zA-Z]", a)} | short_flags(w[1:]))
@@ -372,6 +394,16 @@ def test():
     assert E("s2", "divan:reviewer", "a3", "touch x") and not E("s2", None, None, "touch x")
     assert not E("s3", "general-purpose", "a4", "git push origin HEAD:main")  # no divan session: untouched
     assert E("s4", "divan:manager", None, "ls") is None and E("s4", "divan:reviewer", "a5", "superset ws list")
+    for c in ("codex exec --yolo -s read-only x", "codex exec -s read-only -o out.txt x", "codex exec -s read-only -oout.txt x",
+              "codex exec -s read-only --output-last-message=out.txt x", "codex exec -s read-only --add-dir /x x",
+              "codex exec -s read-only --full-auto x", "codex exec -s read-only resume --last", "codex exec -s read-only review",
+              "codex exec -s read-only -c model=o3 x", "codex review --base main -c sandbox_mode=read-only -m o3",
+              "codex review --base main -c sandbox_mode=read-only --enable x", "codex exec -s", "codex login", "codex"):
+        assert B("reviewer", c), c
+    for c in ('codex exec -s read-only "review this"', "codex exec -s read-only --skip-git-repo-check --ephemeral --json -C /r -m o3 -",
+              'codex review --base main -c sandbox_mode="read-only"', "codex review --uncommitted --config=sandbox_mode=read-only",
+              "codex review --commit abc --title t -c sandbox_mode=read-only focus", "codex e -c sandbox_mode=read-only x"):
+        assert not B("reviewer", c), c
     tmp.cleanup()
     print("ok")
 
