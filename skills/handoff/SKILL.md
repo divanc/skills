@@ -65,8 +65,8 @@ From launch, act on nothing. Two managers on one board give conflicting orders.
 
 ## 3. Take over (the new manager)
 
-Read the handoff file in full, then the charter. The file is a claim written from a full context. Before
-acting, check each row against the world:
+Read the handoff file in full, then the charter. The file is a claim. Before acting, check each row
+against the world:
 
 - `superset terminals list --local --workspace <id>` per task: the terminal is alive, the agent is where
   the file says.

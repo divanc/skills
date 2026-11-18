@@ -152,7 +152,7 @@ Requirements:
 | manager | briefs workers, verifies, runs checks, steers | edit, commit, merge, fetch, write outside its `briefs/` | tools (no Edit); hook: Write only in the `briefs/` beside `charter.md`; git/gh writes and writing Bash commands blocked |
 | worker | one briefed task in its worktree | merge; push to `main` or `deploy`, without a remote and branch, or with options beyond the common ones; `add -A`, `commit -a`, `stash` (but `list`, `show`), `checkout .`, `reset --hard`, `clean -f` | hook |
 | reviewer | scores files with Codex, returns findings | change files; run Codex outside its read-only sandbox | tools; hook |
-| critic | judges what users see against the charter | edit, post, click, `curl` | tools (WebFetch, Slack read-only); hook: the browser only looks |
+| critic | judges what users see against the charter | edit, post, click, `curl` | tools (WebFetch, Slack read-only); hook: the browser only looks; screenshots only to the evidence folder or `$TMPDIR` |
 
 The hook also checks commands inside wrappers (`env`, `xargs`, `bash -c`, ...).
 The exact rules are in `hooks/limits.py`.
