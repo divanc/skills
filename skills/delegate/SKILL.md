@@ -25,10 +25,10 @@ Write the brief to `<evidence folder>/briefs/manager.md` and start the manager a
 
 ```
 superset ws create --local --project <id> --name <name> --branch <branch> --json \
-  --command "claude --dangerously-skip-permissions -n <manager name> --agent divan:manager 'Read your brief at <path> and do it.'"
+  --command "claude --dangerously-skip-permissions -n <manager name> --agent divan:manager 'Read your brief at <absolute path> and do it.'"
 ```
 
-The brief:
+The manager starts in its own worktree, so every path here is absolute. The brief:
 
 ```
 You manage <the work>. Load `manage` and `steer`.

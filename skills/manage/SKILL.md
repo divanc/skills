@@ -33,11 +33,12 @@ Workers are Paradev sessions running `divan:worker`. The agent holds the limits;
 ```
 superset ws create --local --project <id> --name <name> --branch <branch> --base-branch <PR branch> \
   --skip-branch-prefix --json \
-  --command "claude --dangerously-skip-permissions -n <task> --agent divan:worker 'Read your brief at <path>, check your starting commit against its State, and do it.'"
+  --command "claude --dangerously-skip-permissions -n <task> --agent divan:worker 'Read your brief at <absolute path>, check your starting commit against its State, and do it.'"
 ```
 
 `-n <task>` is the session name `ListAgents` shows and `SendMessage` takes. No quotes in the prompt; the
-brief file carries the rest. The output's `terminals[0].terminalId` is the `<id>` the `superset` commands
+brief file carries the rest, naming the charter and evidence folder by absolute path: each worker starts
+in its own worktree. The output's `terminals[0].terminalId` is the `<id>` the `superset` commands
 below take as `--terminal`.
 
 Reviewers and critics are your subagents: the `Agent` tool with `subagent_type` `divan:reviewer` or
