@@ -7,14 +7,19 @@ AGENTS = ("manager", "worker", "reviewer", "critic")
 SESSIONS = os.path.join(os.environ.get("TMPDIR", "/tmp"), "divan-limits")  # session_id -> its main thread's agent
 KEYWORDS = {"if", "then", "else", "elif", "while", "until", "do", "!", "{"}
 GIT_READ = {"status", "log", "diff", "show", "blame", "grep", "ls-files", "ls-tree", "cat-file", "rev-parse",
-            "describe", "shortlog", "merge-base", "rev-list"}
+            "describe", "shortlog", "merge-base", "rev-list", "ls-remote", "for-each-ref", "cherry", "name-rev",
+            "check-ignore"}
 GH_READ = {"view", "list", "diff", "checks", "status", "watch"}
-BRANCH_READ = {"-l", "--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort",
-               "--format", "-a", "-r", "-v", "-vv", "--show-current"}  # --contains to --format take an argument
+LIST_FILTERS = {"-l", "--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at"}
+TAKES_VALUE = {"--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"}
+BRANCH_READ = LIST_FILTERS | TAKES_VALUE | {"-a", "-r", "-v", "-vv", "--show-current"}
 
 
 def api_writes(line):
-    """True if a `gh api` call writes: an explicit non-GET method, else a field or input (which implies POST)."""
+    """True if a `gh api` call writes: a GraphQL mutation or unseen --input; else an explicit non-GET method, else a
+    field (which implies POST)."""
+    if re.search(r"\bgraphql\b", line):
+        return bool(re.search(r"\bmutation\b|--input", line))
     method = re.findall(r"(?:-X|--method)[ =]?([A-Za-z]+)", line)
     return method[-1].upper() != "GET" if method else bool(re.search(r"\s(-f|-F|--field|--raw-field|--input)\b", line))
 
@@ -23,6 +28,7 @@ def commands(cmd):
     """Simple commands of cmd as word lists, split at ; && || | & ( ) and newlines, after dropping heredoc bodies
     (data) and `#` comments (an unquoted `#` that starts a word, to the end of its line); shell keywords dropped."""
     out, delim = [], None
+    cmd = re.sub(r"'[^']*'|\\\n", lambda m: m[0] if m[0][0] == "'" else "", cmd)  # join continuations
     for line in cmd.split("\n"):
         if delim:
             delim = None if line.strip() == delim else delim
@@ -68,17 +74,20 @@ def why(agent, w):
                               or any(re.search(r"(^|[:/+])(main|deploy)$", a) for a in pos[1:])):
             return "workers never push to main or deploy; push your branch"
         return "name the destination: `git push origin <branch>`" if sub == "push" and len(pos) < 2 else None
-    words = [a for i, a in enumerate(args[1:])  # branch operands, not the values of --contains ... --format
-             if not a.startswith("-") and args[i] not in BRANCH_READ - {"-l", "--list"}]
+    words = [a for i, a in enumerate(args[1:]) if not a.startswith("-") and args[i] not in TAKES_VALUE]  # operands
     reads = (sub == "branch" and {a.split("=")[0] for a in args[1:] if a.startswith("-")} <= BRANCH_READ
-             and (not words or {"-l", "--list"} & set(args))
+             and (not words or LIST_FILTERS & {a.split("=")[0] for a in args})
+             or sub in ("stash", "worktree") and args[1:2] == ["list"] or sub == "stash" and args[1:2] == ["show"]
+             or sub == "tag" and (not args[1:] or {"-l", "--list"} & set(args))
+             or sub == "reflog" and args[1:2] in ([], ["show"])
              or sub == "remote" and (args[1:] in ([], ["-v"]) or args[1:2] == ["get-url"])
              or sub == "config" and (args[1:2] in (["get"], ["list"])
                                      or {"--get", "--get-all", "--list", "-l", "--get-regexp"} & set(args)))
     if tool == "git" and (sub not in GIT_READ and not reads
                           or any(len(o := a.split("=")[0]) > 2 and "--output".startswith(o) for a in args)):
         return f"`git {sub}` writes; git is read-only here"
-    if tool == "gh" and not (ops[2:3] and ops[2] in GH_READ or ops[1:2] == ["search"] or ops[1:3] == ["auth", "status"]
+    if tool == "gh" and not (ops[2:3] and ops[2] in GH_READ or ops[1:2] == ["search"] or ops[1:] == ["status"]
+                             or ops[1:3] == ["auth", "status"]
                              or ops[1:2] == ["api"] and not api_writes(line)):
         return "gh is read-only here"
     if tool in ("rm", "mv", "cp", "touch", "tee", "mkdir") or tool == "sed" and re.search(r" (-\w*i|--in-pl)", line):
@@ -135,20 +144,22 @@ def test():
         "manager": ["git commit -m x", "git push origin f", "gh pr create", "rm -rf x", "sed -i s/a/b/ f", "echo x > f",
                     "if true; then rm x; fi", "curl https://x.com/#docs\nrm artifact", "# clean up\nrm -rf x",
                     "ls # c\ngit commit -m x", "echo 'a #b' && rm x"],
-        "worker": ["gh pr merge 1", "gh pr --repo o/r merge 1", "gh -R o/r pr merge 1",
+        "worker": ["gh pr merge 1", "gh pr --repo o/r merge 1", "gh -R o/r pr merge 1", "git push origin \\\nmain",
                    "gh api -X PUT repos/o/r/pulls/1/merge", "git push origin main", "git push",
                    "# Publish\ngit push origin main", "gh api graphql -f query='mutation{mergePullRequest(x)}'",
                    "git push origin HEAD:deploy", "git push --all origin"],
         "reviewer": ["touch x", "git commit -m x", "cat <<EOF\nx\nEOF\ntouch y", "codex exec x",
                      "codex exec --yolo -s read-only x", "codex exec -s read-only -o f x"],
         "critic": ["superset browser eval 1", "touch x", "gh pr merge 1", "git branch new", "git branch -d x",
-                   "gh api --method GET x -X POST", "git branch --sort x new",
+                   "gh api --method GET x -X POST", "git branch --sort x new", "git branch -v new-branch",
+                   "git remote add x u", "git stash", "git worktree add ../x", "git tag v1",
+                   "gh api graphql -f query='mutation { addComment(x) }'", "gh api graphql --input q.json",
                    "git log --output=f", "git diff --outp f", "git config user.name x",
                    "git config --unset user.name", "git config set user.name x"]}
     allowed = {
         "manager": ["npm test", "python3 -m pytest -q", "claude plugin validate .", "superset agents wait",
                     "git log -3 && git diff --stat", "git status 2>&1 | head", "gh pr view 3 --json state"],
-        "worker": ["git push -u origin feat-x", "rm -rf build",
+        "worker": ["git push -u origin feat-x", "rm -rf build", "git push origin \\\nfeature",
                    "git commit -m \"$(cat <<'EOF'\nfix: it's done\nEOF\n)\""],
         "reviewer": ["codex exec -s read-only - <<'EOF'\nReview a.md.\ngit commit is forbidden.\nEOF", "gh pr list",
                      "git branch --show-current", "git branch -a -v", "git remote -v", "git remote get-url origin"],
@@ -158,7 +169,10 @@ def test():
                    "gh api --method GET search/issues -f q=x", "gh pr --repo o/r view 1", "git log --oneline -3",
                    "git config --get user.name", "git config --show-origin --list", "git config get remote.origin.url",
                    "git config -l", "git log --output-indicator-new=+ -1", "git branch --sort committerdate",
-                   "git branch --format '%(refname:short)'", "git branch --contains HEAD -a", "git branch --merged"]}
+                   "git branch --format '%(refname:short)'", "git branch --contains HEAD -a", "git branch --merged",
+                   "gh status", "gh auth status", "git stash list", "git worktree list", "git tag", "git tag -l 'v*'",
+                   "git ls-remote origin", "git reflog", "git branch -v --list 'feat*'",
+                   "gh api graphql -f query='query { viewer { login } }'", "sed -n 's/a/b/p' f", "sort f 2>/dev/null"]}
     assert all(B("divan:" + a, c) for a, cs in blocked.items() for c in cs)
     assert not any(B("divan:" + a, c) for a, cs in allowed.items() for c in cs)
     assert not B("divan:worker", "git status", "s1") and B("general-purpose", "git push origin main", "s1", "a1")
