@@ -152,10 +152,13 @@ Requirements:
 
 | agent | does | can't | enforced by |
 |---|---|---|---|
-| manager | briefs workers, verifies, runs checks, steers | edit, commit, merge, fetch; write outside its `briefs/` | tools (no Edit); hook: Write only to files directly in the `briefs/` beside `charter.md` (path resolved); git and gh read-only; writing Bash commands denied, also behind `env`, `nohup`, `xargs`, `sudo`, `bash -c` and the like |
-| worker | one briefed task in its worktree | merge; push to `main` or `deploy`, even wrapped; `git add -A` or `.`, `commit -a`, `stash` (but `list`, `show`), `checkout .`, pathless `restore`, `reset --hard`, `clean -f` | hook |
-| reviewer | scores files with Codex, returns findings | change files; run Codex outside its read-only sandbox | tools; hook: Bash reads only, Codex only as `exec -s read-only` or `review -c sandbox_mode="read-only"` |
-| critic | judges what users see against the charter | edit, post, click; `curl` | tools (WebFetch, Slack read-only); hook: Bash reads only, `superset browser` only `list`, `open`, `navigate`, `screenshot`, `console` |
+| manager | briefs workers, verifies, runs checks, steers | edit, commit, merge, fetch, write outside its `briefs/` | tools (no Edit); hook: Write only in the `briefs/` beside `charter.md`; git, gh and writing Bash commands blocked |
+| worker | one briefed task in its worktree | merge; push to `main` or `deploy`, or without naming the branch; `add -A`, `commit -a`, `stash`, `checkout .`, `reset --hard`, `clean -f` | hook |
+| reviewer | scores files with Codex, returns findings | change files; run Codex outside its read-only sandbox | tools; hook |
+| critic | judges what users see against the charter | edit, post, click, `curl` | tools (WebFetch, Slack read-only); hook: the browser only looks |
+
+The hook also checks commands inside wrappers (`env`, `xargs`, `bash -c`, ...).
+The exact rules are in `hooks/limits.py`.
 
 No divan agent merges: `gh pr merge` is blocked for all four. Your own session
 isn't limited.
@@ -166,8 +169,9 @@ isn't limited.
   own syntax still gets past it: `sed`'s `w`, a test, a script.
 - Nothing confines a worker to its brief's files.
 - Agents run on the owner's GitHub credentials, so GitHub can't tell an agent
-  merge from yours: the hook is what stops it. Require a PR and a review on
-  `main` and `deploy` so a push the hook misses still can't land.
+  merge from yours: the hook is what stops it, and a `remote.<name>.push`
+  mapping can still redirect a named push. Require a PR and a review on `main`
+  and `deploy` so a push the hook misses still can't land.
 
 ## License
 
