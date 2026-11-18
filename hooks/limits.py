@@ -71,7 +71,8 @@ def why(agent, w):
     sub, pos = (args[:1] or [""])[0] if tool == "git" else "", [a for a in args[1:] if not a.startswith("-")]
     if agent == "worker":
         if sub == "push" and ({"--all", "--mirror"} & set(args)
-                              or any(re.search(r"(^|[:/+])(main|deploy)$", a) for a in pos[1:])):
+                              or any(a.split(":")[-1].lstrip("+").removeprefix("refs/heads/") in ("main", "deploy")
+                                     for a in pos[1:])):  # the destination ref, whole
             return "workers never push to main or deploy; push your branch"
         return "name the destination: `git push origin <branch>`" if sub == "push" and len(pos) < 2 else None
     words = [a for i, a in enumerate(args[1:]) if not a.startswith("-") and args[i] not in TAKES_VALUE]  # operands
@@ -145,7 +146,8 @@ def test():
                     "if true; then rm x; fi", "curl https://x.com/#docs\nrm artifact", "# clean up\nrm -rf x",
                     "ls # c\ngit commit -m x", "echo 'a #b' && rm x"],
         "worker": ["gh pr merge 1", "gh pr --repo o/r merge 1", "gh -R o/r pr merge 1", "git push origin \\\nmain",
-                   "gh api -X PUT repos/o/r/pulls/1/merge", "git push origin main", "git push",
+                   "gh api -X PUT repos/o/r/pulls/1/merge", "git push origin main", "git push", "git push origin +main",
+                   "git push origin HEAD:refs/heads/main", "git push origin feat:deploy",
                    "# Publish\ngit push origin main", "gh api graphql -f query='mutation{mergePullRequest(x)}'",
                    "git push origin HEAD:deploy", "git push --all origin"],
         "reviewer": ["touch x", "git commit -m x", "cat <<EOF\nx\nEOF\ntouch y", "codex exec x",
@@ -159,8 +161,8 @@ def test():
     allowed = {
         "manager": ["npm test", "python3 -m pytest -q", "claude plugin validate .", "superset agents wait",
                     "git log -3 && git diff --stat", "git status 2>&1 | head", "gh pr view 3 --json state"],
-        "worker": ["git push -u origin feat-x", "rm -rf build", "git push origin \\\nfeature",
-                   "git commit -m \"$(cat <<'EOF'\nfix: it's done\nEOF\n)\""],
+        "worker": ["git push -u origin feat-x", "git push origin feature/main fix/deploy", "rm -rf build",
+                   "git push origin \\\nfeature", "git commit -m \"$(cat <<'EOF'\nfix: it's done\nEOF\n)\""],
         "reviewer": ["codex exec -s read-only - <<'EOF'\nReview a.md.\ngit commit is forbidden.\nEOF", "gh pr list",
                      "git branch --show-current", "git branch -a -v", "git remote -v", "git remote get-url origin"],
         "critic": ["superset browser screenshot --out /tmp/s.png", "superset --json browser list",
