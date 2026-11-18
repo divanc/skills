@@ -59,7 +59,7 @@ yours isn't. No quotes in the prompt; the file names you for `TOOK OVER`. The ou
 step 4's `agents wait` takes.
 
 Not `--from-terminal`: it seeds the session with the last 36k characters of your screen, mostly tool
-output, which is the context you are handing off to escape.
+output.
 
 From launch, act on nothing. Two managers on one board give conflicting orders.
 

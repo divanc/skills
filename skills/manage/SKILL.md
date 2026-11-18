@@ -53,9 +53,9 @@ Reviewers and critics are your subagents: the `Agent` tool with `subagent_type` 
 [ ] 5  adversarial QA          two agents, parallel
 ```
 
-After a context summary, the board, the commits and the charter are enough to resume. Each brief's `State` line
-is copied from it; writing that line from memory means you skipped step 5. Under a charter, past 60%
-context, run `handoff` before the summary comes.
+After a context summary, resume from the board, the commits, the charter and the last report's evidence,
+then run `steer`. Each brief's `State` line is copied from the board; writing that line from memory
+means you skipped step 5. Under a charter, past 60% context, run `handoff` before the summary comes.
 
 ## Finish signals
 
