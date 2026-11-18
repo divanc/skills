@@ -148,8 +148,8 @@ in the PR.
 ### The critic
 
 What users see (Slack messages, UI) also goes to a `divan:critic` subagent, judged against the charter's
-references, PASS or FAIL per reference with quoted evidence. Tests prove it works, not that it reads
-right.
+references (without a charter, the agreed acceptance criteria and the user-facing references), PASS or
+FAIL per reference with quoted evidence. Tests prove it works, not that it reads right.
 
 ### Audit agents
 
