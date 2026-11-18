@@ -140,9 +140,9 @@ divan:<name>`); the reviewer and critic are the manager's subagents.
 Requirements:
 
 - Paradev, for the `superset` CLI that launches and watches sessions.
-- Claude Code 2.1.295 or later, and `python3` 3.9 or later, for the hook. The hook fails
-  closed: without `python3`, Bash and Write are blocked in every session that
-  loads the plugin.
+- Claude Code 2.1.295 or later, and `python3` 3.9 or later, for the hook. The
+  hook fails closed: without `python3`, Bash, Write, Agent and Workflow calls
+  are blocked in every session that loads the plugin.
 - Codex CLI 0.169 or later (`codex exec`, `codex review`), for the reviewer.
 - Owner and manager in the same permission-mode class, with inbound messages
   allowed; otherwise Claude Code holds or refuses their messages. Check the
@@ -159,13 +159,16 @@ The hook also checks commands inside wrappers (`env`, `xargs`, `bash -c`, ...).
 The exact rules are in `hooks/limits.py`.
 
 No divan agent merges: `gh pr merge` is blocked for all four. Your own session
-isn't limited.
+isn't limited, even when it spawns divan subagents. Any other subagent a divan
+agent spawns (general-purpose, Explore, ...) runs under that agent's limits; a
+reviewer or critic keeps its own.
 
 ### Gaps
 
 - The hook matches Bash as command text, so a command that writes through its
   own syntax still gets past it: `sed`'s `w`, a test, a script.
 - Nothing confines a worker to its brief's files.
+- Agents started by the Workflow tool are untested against these limits.
 - Agents run on the owner's GitHub credentials, so GitHub can't tell an agent
   merge from yours: the hook is what stops it, and a `remote.<name>.push`
   mapping can still redirect a named push. Require a PR and a review on `main`
