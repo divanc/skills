@@ -53,6 +53,27 @@ def segments(cmd):
     return [s for s in out if s]
 
 
+def shell_command(w):
+    """The command string of `sh|bash|zsh ... -c ... <cmd>`, read as bash reads argv: options (clusters, -o/-O and
+    --rcfile/--init-file values) and a `--` come first, then the first operand is <cmd>. None without -c."""
+    c, i = False, 1
+    while i < len(w):
+        a = w[i]
+        if a == "--":
+            i += 1
+            break
+        if a in ("--rcfile", "--init-file"):
+            i += 2
+        elif re.match(r"^[-+][a-zA-Z]+$", a):
+            c = c or a[0] == "-" and "c" in a
+            i += 2 if a[-1] in "oO" else 1
+        elif a.startswith("--"):
+            i += 1
+        else:
+            break
+    return w[i] if c and i < len(w) else None
+
+
 def commands(cmd):
     """Simple commands in cmd with wrappers peeled: `env X=1 git push` is `git push`; `bash -c '<cmd>'` is <cmd>.
     A wrapper and its own options come out as a command too, so `time -o FILE` is checked."""
@@ -61,8 +82,8 @@ def commands(cmd):
             tool = w[0].rsplit("/", 1)[-1]
             if re.match(r"^\w+=", w[0]):
                 w = w[1:]
-            elif tool in ("sh", "bash", "zsh") and any(re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", a) for a in w[1:-1]):
-                yield from commands(w[next(i for i, a in enumerate(w) if re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", a)) + 1])
+            elif tool in ("sh", "bash", "zsh") and shell_command(w) is not None:
+                yield from commands(shell_command(w))
                 w = []
             elif tool in WRAP:
                 own, w = w[:1], w[1:]
@@ -404,6 +425,12 @@ def test():
               'codex review --base main -c sandbox_mode="read-only"', "codex review --uncommitted --config=sandbox_mode=read-only",
               "codex review --commit abc --title t -c sandbox_mode=read-only focus", "codex e -c sandbox_mode=read-only x"):
         assert not B("reviewer", c), c
+    for sh in ("bash", "sh", "zsh"):
+        for f in ("{} -c -- '{}'", "{} -c -e -- '{}'", "{} -o pipefail -c '{}'", "{} --norc -lc -- '{}'", "{} -O extglob -ec '{}'"):
+            for a in AGENTS:
+                assert B(a, f.format(sh, "gh pr merge 1")), (a, f, sh)
+            assert B("worker", f.format(sh, "git push origin main")) and B("manager", f.format(sh, "rm f")), (f, sh)
+    assert shell_command(["bash", "script.sh"]) is None and not B("manager", "bash -c -- 'ls'")
     tmp.cleanup()
     print("ok")
 
