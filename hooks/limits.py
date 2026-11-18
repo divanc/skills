@@ -35,9 +35,27 @@ AGENTS = ("manager", "worker", "reviewer", "critic")
 SESSIONS = os.path.join(os.environ.get("TMPDIR", "/tmp"), "divan-limits")  # session_id -> its main thread's agent
 
 
+def join_lines(cmd):
+    """cmd with backslash-newline continuations removed, as the shell does outside single quotes."""
+    out, q, i = [], None, 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if q != "'" and ch == "\\":
+            out.append("" if cmd[i + 1:i + 2] == "\n" else cmd[i:i + 2])
+            i += 2
+            continue
+        if q is None and ch in "'\"":
+            q = ch
+        elif ch == q:
+            q = None
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def protect(cmd):
     """cmd with quoted or escaped operator characters swapped for private-use stand-ins, so `grep ">" f` keeps `>`
-    a word: shlex alone drops the quotes and returns a bare `>`."""
+    a word (shlex alone drops the quotes and returns a bare `>`), and unquoted newlines made `;`."""
     out, q, i = [], None, 0
     while i < len(cmd):
         ch = cmd[i]
@@ -52,6 +70,8 @@ def protect(cmd):
             q = None
         elif q and ch in OPS:
             ch = chr(STAND_IN + ord(ch))
+        elif not q and ch == "\n":  # an unquoted newline ends a command
+            ch = " ; "
         out.append(ch)
         i += 1
     return "".join(out)
@@ -68,7 +88,7 @@ def segments(cmd):
     """Simple commands in cmd as word lists; $(...) and `...` bodies count as commands too."""
     out = []
     for c in [cmd] + [a or b for a, b in re.findall(r"\$\(([^()]*)\)|`([^`]*)`", cmd)]:
-        lex = shlex.shlex(protect(c.replace("\n", " ; ")), posix=True, punctuation_chars=True)
+        lex = shlex.shlex(protect(join_lines(c)), posix=True, punctuation_chars=True)
         lex.whitespace_split = True
         try:
             toks = [unprotect(t) for t in lex]
@@ -210,7 +230,7 @@ def codex_read_only(w):
     return set(sandbox) == {"sandbox_mode=read-only"}
 
 
-def reader(agent, w):
+def reader(agent, w, cwd="."):
     """Why w writes, for the manager (denylist) and the reviewer and critic (allowlist)."""
     tool, line = w[0].rsplit("/", 1)[-1], " ".join(w)
     if agent == "manager":
@@ -250,6 +270,9 @@ def reader(agent, w):
                 "with the flags the reviewer uses (no -o, --yolo, --add-dir, ...)")
     if tool in ("superset", "paradev") and agent == "critic" and (w[1:2] != ["browser"] or (w[2:3] or [""])[0] not in BROWSER_READ):
         return "the critic uses only `superset browser list|open|navigate|screenshot|console`"
+    if tool in ("superset", "paradev") and agent == "critic" and not all(
+            evidence_or_tmp(os.path.join(cwd, os.path.expanduser(v))) for v in option_values(w, "--out", "--out")):
+        return "screenshots go into the evidence folder (next to charter.md) or $TMPDIR"
     if tool == "curl" and (set("XdFTOo") & ({a[1] for a in w[1:] if re.match(r"^-[a-zA-Z]", a)} | short_flags(w[1:]))
                            or any(re.match(r"^--(data|form|upload-file|output|request|json)", a) for a in w[1:])):
         return "curl only reads: no method, body, upload or output file"
@@ -283,6 +306,20 @@ def worker(w):
     if sweeps:
         return f"`git {' '.join(a)}` touches files beyond your own; stage, restore and clean by explicit path"
     return None
+
+
+def evidence_or_tmp(p):
+    """True if p, resolved, lies under $TMPDIR or under a directory holding charter.md (the evidence folder)."""
+    p = os.path.realpath(p)
+    tmp = os.path.realpath(os.environ.get("TMPDIR") or "/nonexistent")
+    if os.path.commonpath([p, tmp]) == tmp:
+        return True
+    d = os.path.dirname(p)
+    while d != os.path.dirname(d):
+        if os.path.isfile(os.path.join(d, "charter.md")):
+            return True
+        d = os.path.dirname(d)
+    return False
 
 
 def brief_path(p):
@@ -331,7 +368,7 @@ def check(event):
         if agent == "worker":
             why = worker(strip_redirects(w))
         else:
-            why = "output redirect to a file" if redirects_to_file(w) else reader(agent, strip_redirects(w))
+            why = "output redirect to a file" if redirects_to_file(w) else reader(agent, strip_redirects(w), event.get("cwd", "."))
         if why:
             return f"{agent}: {why}"
     return None
@@ -386,7 +423,7 @@ def test():
         assert not B("reviewer", c), c
     for c in ("superset agents create", "superset browser eval 1", "superset browser cdp", "curl https://x"):
         assert B("critic", c), c
-    assert not B("critic", "superset browser screenshot --out /tmp/s.png")
+    assert not B("critic", f"superset browser screenshot --out {ev}/s.png") and not B("critic", "superset browser screenshot")
     assert not check({"tool_name": "Bash", "tool_input": {"command": "gh pr merge 1"}})  # plain sessions untouched
     # Wrapper and option regressions
     for a in ("manager", "worker", "reviewer", "critic"):
@@ -478,6 +515,19 @@ def test():
             assert not B(a, c), (a, c)
         for c in ("grep x > f", "grep '>' f > out", 'bash -c \'grep ">" f > out\'', "grep x '>'> f"):
             assert B(a, c), (a, c)
+    for c in ("git \\\npush origin main", "git push \\\n origin main", "gh \\\npr merge 1", "bash -c 'git \\\npush origin main'",
+              'git push origin "ma\\\nin"'):
+        assert B("worker", c), c
+    assert not B("worker", "git push origin 'ma\\\nin'")  # literal in single quotes: not main
+    assert not B("worker", "echo 'a\\\nb' && git status") and B("manager", "ls \\\n> f")
+    tmpdir, os.environ["TMPDIR"] = os.environ.get("TMPDIR"), "/nonexistent"  # test the evidence-folder rule alone
+    os.symlink("/usr", f"{ev}/out")
+    for c in (f"superset browser screenshot --out {ev}/shots/s.png", f"superset browser screenshot --out={ev}/briefs/s.png"):
+        assert not B("critic", c), c
+    for c in ("superset browser screenshot --out /usr/s.png", f"superset browser screenshot --out {ev}/out/s.png",
+              f"superset browser screenshot --out {ev}/../s.png", "superset browser screenshot --out ~/s.png"):
+        assert B("critic", c), c
+    os.environ["TMPDIR"] = tmpdir or ""
     tmp.cleanup()
     print("ok")
 
