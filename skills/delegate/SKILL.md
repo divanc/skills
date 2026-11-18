@@ -43,9 +43,10 @@ a decision from the Ask list, or a proposed Changes entry. Nothing else needs me
 Keep the workspace ID and `terminals[0].terminalId` from its JSON. On a handoff ("I manage <work> now..."), replace
 the saved name and IDs with the new manager's and subscribe again. Subscribe with
 `SendMessage(to: <manager name>, notify_when_idle: true)`; block with `superset agents wait --local
---workspace <id> --terminal <id> --until settled`; never a screen poller. By default Claude Code holds messages
-from a session in another permission-mode class: run the owner in the manager's mode class, or set
-`crossSessionInbound: accept`. Check each delivery notice.
+--workspace <id> --terminal <id> --until settled`; never a screen poller. The notice is one-shot: woken without
+DONE or BLOCKED, read the manager's screen (`superset terminals read --local --workspace <id> --terminal <id>`)
+and subscribe again. By default Claude Code holds messages from a session in another permission-mode class: run
+the owner in the manager's mode class, or set `crossSessionInbound: accept`. Check each delivery notice.
 
 ## 3. While it runs
 

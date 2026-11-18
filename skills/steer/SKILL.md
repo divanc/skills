@@ -35,9 +35,8 @@ Run each on the diff and the actions taken (commits, PRs, pushes, posts), not on
 ## Output
 
 The guard sets the verdict: check 5 failed escalates, never corrects; else 1-4 failed corrects; else continue.
-A correction lists every failed check. An improve line, when check 6 finds one, rides with any verdict. Each line
-quotes the charter line it rests on (check 3 may quote the repo rule, check 4 the brief); nothing to quote, no
-correction.
+A correction lists every failed check. Append the improvement, if any, to the verdict. Each line quotes the
+charter line it rests on (check 3 may quote the repo rule, check 4 the brief); nothing to quote, no correction.
 
 ```
 continue
