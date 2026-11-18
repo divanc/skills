@@ -33,6 +33,13 @@ CURL = {"-s": 0, "--silent": 0, "-S": 0, "--show-error": 0, "-L": 0, "--location
         "--retry": 1, "-w": 1, "--write-out": 1, "--url": 1, "-e": 1, "--referer": 1}
 SHELLS = ("sh", "bash", "zsh", "dash", "ksh", "fish")
 RISKY_ENV = r"^(GIT_\w*|PAGER|EDITOR|VISUAL|BASH_ENV|ENV|PATH|LESSOPEN|LESSCLOSE|LD_\w+|DYLD_\w+)="  # change what runs
+PREFIX_WORDS = {"if", "then", "else", "elif", "while", "until", "do", "!", "{"}  # shell words before a command
+END_WORDS = {"fi", "done", "}"}
+LONG_VALUES = {  # git long options that take the next word as their value
+    "commit": ("--message", "--file", "--author", "--date", "--template", "--reuse-message", "--reedit-message",
+               "--fixup", "--squash", "--cleanup", "--trailer", "--pathspec-from-file"),
+    "checkout": ("--orphan", "--conflict", "--pathspec-from-file"), "switch": ("--create", "--force-create", "--orphan"),
+    "clean": ("--exclude",), "add": ("--chmod", "--pathspec-from-file")}
 SWEEP_PATHS = {".", ":/", ":", "*", ":/*"}  # pathspecs that take the whole tree
 RUNS_OR_WRITES = {"rg": ("--pre",), "sort": ("--compress-program",), "file": ("-C", "--compile"),
                   "date": ("-s", "--set")}  # options of read tools that run a program or change state
@@ -312,6 +319,15 @@ def peel(w):
     """The commands one simple command w runs: itself, or what its wrapper, shell, eval or `find -exec` runs."""
     while w:
         tool = w[0].rsplit("/", 1)[-1]
+        if w[0] in PREFIX_WORDS | END_WORDS:
+            w = w[1:]
+            continue
+        if w[0] in ("for", "select"):
+            if not (re.match(r"^\w+$", (w[1:2] or ["("])[0]) and w[2:3] in ([], ["in"])):
+                raise Blocked(f"a `{w[0]}` header the hook cannot read")
+            return  # `for NAME in WORDS` runs nothing itself; its body is the next commands
+        if w[0] in ("case", "function", "coproc"):
+            raise Blocked(f"`{w[0]}` is shell syntax the hook does not read")
         if re.match(RISKY_ENV, w[0]):
             raise Blocked(f"`{w[0].split('=')[0]}=` changes what a command runs")
         if re.match(r"^\w+=", w[0]):
@@ -381,17 +397,19 @@ def long_opt(args, *names):
                for a in args)
 
 
-def short_flags(args, values=""):
+def short_flags(args, values="", long_values=()):
     """Single-letter flags in args; `values` are the letters that take a value, so `-am'fix: a'` is a and m, and
-    `-mchange` is m alone."""
+    `-mchange` is m alone. A long option in long_values takes the next word too: `--message -a` sets no flag."""
     out, skip = set(), False
     for a in args:
-        if skip or a == "--":
+        if skip:
             skip = False
-            if a == "--":
-                break
             continue
-        if re.match(r"^-[a-zA-Z]", a):
+        if a == "--":
+            break
+        if a.startswith("--") and "=" not in a:
+            skip = long_opt([a], *long_values)
+        elif re.match(r"^-[a-zA-Z]", a):
             letters, skip = cluster(a, lambda c: c in values)
             out |= set(letters)
     return out
@@ -543,7 +561,8 @@ def worker_git(w):
             return "workers never push to main or deploy; push your branch"
         if len(pos) < 2 or any(re.match(r"^\+?(HEAD|@)$", x) for x in pos[1:]):  # the destination comes from config
             return "name the destination: `git push origin <branch>`"
-    short = short_flags(rest, {"commit": "mFcCtSu", "checkout": "bB", "switch": "cC", "clean": "e"}.get(sub, ""))
+    short = short_flags(rest, {"commit": "mFcCtSu", "checkout": "bB", "switch": "cC", "clean": "e"}.get(sub, ""),
+                        LONG_VALUES.get(sub, ()))
     sweeps = (sub == "add" and ({"A", "u"} & short or long_opt(rest, "--all", "--update"))
               or sub in ("add", "checkout", "restore") and SWEEP_PATHS & set(pos)
               or sub == "commit" and ("a" in short or long_opt(rest, "--all"))
@@ -617,18 +636,40 @@ def check(event):
         return f"{agent}: {e}"
 
 
+def merge_call(w, cmd):
+    """True if w merges a PR: `gh pr merge`, a non-GET `gh api` call to pulls/<n>/merge, `gh api graphql` with a merge
+    mutation (in its words, or anywhere in cmd when the body comes from --input), or curl/wget at pulls/<n>/merge."""
+    tool = (w or [""])[0].rsplit("/", 1)[-1]
+    if tool in ("curl", "wget", "http", "xh"):
+        return any(re.search(r"pulls/\d+/merge", a) for a in w)
+    if tool != "gh":
+        return False
+    words = gh_words(w)
+    if words[:2] == ["pr", "merge"]:
+        return True
+    if words[:1] != ["api"]:
+        return False
+    body = any(re.match(r"^(-[fF]|--(field|raw-field|input))", a) for a in w)
+    method = (option_values(w, "-X", "--method") or ["POST" if body else "GET"])[-1].upper()
+    mutation = r"mergePullRequest|enablePullRequestAutoMerge"
+    if words[1:2] == ["graphql"]:
+        return any(re.search(mutation, a) for a in w) or long_opt(w, "--input") and bool(re.search(mutation, cmd))
+    return method != "GET" and any(re.search(r"pulls/\d+/merge", a) for a in words[1:2])
+
+
 def bash(agent, cmd):
     for w in commands(cmd):
         if w[0].rsplit("/", 1)[-1] == "gh" and any(re.search(r"[$`]", x) for x in gh_words(strip_redirects(w))[:2]):
             return f"{agent}: name gh's command literally, not through a variable"
-    merges = re.search(r"pulls/\d+/merge|mergePullRequest|enablePullRequestAutoMerge", cmd) or any(  # parsed, and as tokens: gh, then pr, then merge
-        w[0].rsplit("/", 1)[-1] == "gh" and gh_words(strip_redirects(w))[:2] == ["pr", "merge"] for w in commands(cmd)) or any(
+    merges = any(merge_call(strip_redirects(w), cmd) for w in commands(cmd)) or any(  # parsed, and as tokens: gh, pr, merge
         re.search(r"(^|\x00)(\S*/)?gh\x00(.*\x00)?pr\x00(.*\x00)?merge(\x00|$)", "\x00".join(w)) for w in segments(cmd))
     if merges:
         return "merging is divan's; no agent merges"
     if agent != "worker" and any(redirects_to_file(w) for w in segments(cmd)):  # before wrappers are peeled
         return f"{agent}: output redirect to a file"
     for w in commands(cmd):
+        if not strip_redirects(w):  # only redirections, e.g. what follows `done`
+            continue
         if agent == "worker":
             why = worker(strip_redirects(w))
         else:
@@ -887,6 +928,24 @@ def test():
               "git checkout --forc main", "git switch --disc x", "git push --al origin", "git push --mir origin"):
         assert B("worker", c), c
     assert not B("worker", "git commit --amend --no-edit") and not B("worker", "git commit --author=x -m y")
+    # Shell keywords; long options with values; merge checks only on merge calls
+    assert B("manager", "if true; then rm victim; fi") and B("manager", "{ rm x; }") and B("manager", "! rm x")
+    assert B("worker", "bash -c 'if true; then git push origin main; fi'") and B("worker", "until false; do git push origin main; done")
+    assert B("worker", "while read l; do git commit -am x; done < list") and B("worker", "for f in a b; do git add -A; done")
+    for c in ("case x in a) rm y;; esac", "case x in a) echo ok;; esac", "function f { rm x; }", "for ((i=0;i<3;i++)); do ls; done", "coproc rm x",
+              "select x; do rm y; done"):
+        assert B("manager", c), c
+    for a in ("manager", "reviewer", "critic"):
+        for c in ("if test -f x; then cat x; else ls; fi", "for f in a b; do cat $f; done", "{ ls; }", "! grep -q x f"):
+            assert not B(a, c), (a, c)
+    assert not B("worker", "while true; do git status; done") and not B("worker", "if git diff --quiet; then git commit -m x; fi")
+    assert not B("worker", "git commit --message -a") and not B("worker", "git commit --mess -a") and B("worker", "git commit --amend -a")
+    for c in ("gh api repos/o/r/pulls/1/merge -X GET", "gh api repos/o/r/pulls/1/merge", "git log --format=mergePullRequest",
+              "grep -r pulls/1/merge docs", "gh api graphql -f query='query { viewer { login } }'"):
+        assert not B("worker", c), c
+    for c in ("gh api repos/o/r/pulls/1/merge -X PUT", "gh api -XPUT repos/o/r/pulls/1/merge", "gh api repos/o/r/pulls/1/merge -f m=s",
+              "curl -X PUT https://api.github.com/repos/o/r/pulls/1/merge"):
+        assert B("worker", c), c
     here = os.getcwd()
     os.chdir(ev)  # relative paths would resolve inside the evidence folder; they block anyway
     for c in ("superset browser screenshot --out shot.png", "superset browser screenshot --out ./s.png",
