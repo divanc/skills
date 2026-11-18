@@ -52,6 +52,7 @@ BROWSER_READ = {"list", "open", "navigate", "screenshot", "console"}
 SEP = {"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"}
 REDIR = set("<>&|")  # `>|` writes too
 OPS, STAND_IN = "<>|&;()", 0xE000  # shell operator characters; private-use offset for their quoted copies
+FIND_END = {";", "+", chr(STAND_IN + ord(";"))}  # ends a find -exec command (`\;` and `';'` stay stand-ins)
 AGENTS = ("manager", "worker", "reviewer", "critic")
 
 
@@ -176,20 +177,19 @@ def substitutions(cmd):
 def segments(cmd):
     """Simple commands in cmd as word lists; $(...) and `...` bodies count as commands too."""
     out = [seg for body in substitutions(cmd) for seg in segments(body)]
-    for c in [cmd]:
-        lex = shlex.shlex(protect(join_lines(c)), posix=True, punctuation_chars=True)
-        lex.whitespace_split = True
-        try:
-            toks = [unprotect(t) for t in lex]
-        except ValueError:
-            toks = c.split()
-        seg = []
-        for t in toks + [";"]:
-            if t in SEP:
-                out.append(seg)
-                seg = []
-            else:
-                seg.append(t)
+    lex = shlex.shlex(protect(join_lines(cmd)), posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    try:
+        toks = [unprotect(t) for t in lex]
+    except ValueError:
+        toks = cmd.split()
+    seg = []
+    for t in toks + [";"]:
+        if t in SEP:
+            out.append(seg)
+            seg = []
+        else:
+            seg.append(t)
     return [s for s in out if s]
 
 
@@ -233,29 +233,41 @@ def commands(cmd):
     """Simple commands in cmd with wrappers peeled: `env X=1 git push` is `git push`; `bash -c '<cmd>'` is <cmd>.
     A wrapper and its own options come out as a command too, so `time -o FILE` is checked."""
     for w in segments(cmd):
-        while w:
-            tool = w[0].rsplit("/", 1)[-1]
-            if re.match(RISKY_ENV, w[0]):
-                raise Blocked(f"`{w[0].split('=')[0]}=` changes what a command runs")
-            if re.match(r"^\w+=", w[0]):
-                w = w[1:]
-            elif tool == "eval":
-                yield from commands(" ".join(w[1:]))
-                w = []
-            elif tool in SHELLS and shell_command(w) is not None:
-                yield from commands(shell_command(w))
-                w = []
-            elif tool in WRAP:
-                own, w = read_options(tool, w[1:], WRAP[tool])
-                if tool == "timeout":
-                    own, w = own + w[:1], w[1:]  # the duration
-                split = option_values(own, "-S", "--split-string")
-                if split:
-                    w = shlex.split(split[0]) + w  # env -S '<cmd>' runs <cmd>
-                yield [tool] + own
-            else:
-                yield w
-                w = []
+        yield from peel(w)
+
+
+def peel(w):
+    """The commands one simple command w runs: itself, or what its wrapper, shell, eval or `find -exec` runs."""
+    while w:
+        tool = w[0].rsplit("/", 1)[-1]
+        if re.match(RISKY_ENV, w[0]):
+            raise Blocked(f"`{w[0].split('=')[0]}=` changes what a command runs")
+        if re.match(r"^\w+=", w[0]):
+            w = w[1:]
+        elif tool == "eval":
+            yield from commands(" ".join(w[1:]))
+            w = []
+        elif tool in SHELLS and shell_command(w) is not None:
+            yield from commands(shell_command(w))
+            w = []
+        elif tool == "find":
+            yield w
+            for i, t in enumerate(w):
+                if t in ("-exec", "-execdir", "-ok", "-okdir"):
+                    end = next((k for k in range(i + 1, len(w)) if w[k] in FIND_END), len(w))
+                    yield from peel(w[i + 1:end])
+            w = []
+        elif tool in WRAP:
+            own, w = read_options(tool, w[1:], WRAP[tool])
+            if tool == "timeout":
+                own, w = own + w[:1], w[1:]  # the duration
+            split = option_values(own, "-S", "--split-string")
+            if split:
+                w = shlex.split(split[0]) + w  # env -S '<cmd>' runs <cmd>
+            yield [tool] + own
+        else:
+            yield w
+            w = []
 
 
 def redirects_to_file(w):
@@ -378,7 +390,8 @@ def reader(agent, w):
             return "sed -i edits files"
     elif tool not in READ | EXTRA[agent] | WRAP.keys():
         return f"`{tool}` is not on the {agent}'s read-only list"
-    if (any(a.startswith("--output") for a in w) or tool in ("sort", "tree", "time") and any(re.match(r"^-[a-zA-Z]*o", a) for a in w[1:])
+    if (tool in ("sort", "git") and any(a.startswith("--output") for a in w)
+            or tool == "sort" and "o" in short_flags(w[1:], "ktoST") or tool == "tree" and "o" in short_flags(w[1:], "LPIo")
             or tool == "uniq" and len([a for a in w[1:] if not a.startswith("-")]) > 1):
         return "an output file"
     if any(a.startswith(o) for o in RUNS_OR_WRITES.get(tool, ()) for a in w[1:]):
@@ -426,9 +439,9 @@ def reader(agent, w):
 
 
 def worker(w):
-    """Why the worker may not run w: pushes to main/deploy and git commands that sweep files. A `git` word anywhere
-    counts, so `timeout 60 git push ...` and `find -exec git push ...` are read too."""
-    return next(filter(None, (worker_git(w[i:]) for i, t in enumerate(w) if t.rsplit("/", 1)[-1] == "git")), None)
+    """Why the worker may not run w: pushes to main/deploy and git commands that sweep files. `w` is already a command
+    in executable position (wrappers, shells, eval and `find -exec` peeled), so `rg git README.md` is not git."""
+    return worker_git(w) if w[0].rsplit("/", 1)[-1] == "git" else None
 
 
 def worker_git(w):
@@ -758,6 +771,17 @@ def test():
                   "echo '{\"query\":\"mutation{mergePullRequest(input:{})}\"}' | gh api graphql --input -"):
             assert B(a, c), (a, c)
     assert not B("worker", "gh api graphql -f query='query { viewer { login } }'")
+    # git counts only where it runs; --output/-o only where they write
+    for c in ("rg git README.md", "grep -r 'git push' docs", "echo git push origin main", "npm test -- --output-format=json"):
+        assert not B("worker", c), c
+    for c in ("find . -execdir git push origin main '+'", "find . -ok git add -A ';'", "xargs -n1 git push origin main",
+              "nohup git push origin main", "find . -exec git push origin main \\;"):
+        assert B("worker", c), c
+    for c in ("npm test -- --output-format=json", "pytest -o log_cli=true", "jq -o x f"):
+        assert not B("manager", c), c
+    for c in ("sort -o out f", "sort --output=out f", "sort -ro out f", "tree -o out", "git log --output=x", "git diff --output x"):
+        assert B("manager", c), c
+    assert not B("manager", "sort -t, -k2 f") and not B("manager", "sort -to f") and not B("manager", "tree -L 2")
     here = os.getcwd()
     os.chdir(ev)  # relative paths would resolve inside the evidence folder; they block anyway
     for c in ("superset browser screenshot --out shot.png", "superset browser screenshot --out ./s.png",
