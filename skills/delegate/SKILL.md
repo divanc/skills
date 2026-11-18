@@ -40,7 +40,8 @@ Report to me (<owner name>) by SendMessage: DONE or BLOCKED with evidence per Do
 a decision from the Ask list, or a proposed Changes entry. Nothing else needs me.
 ```
 
-Keep the workspace ID and `terminals[0].terminalId` from its JSON. Subscribe with
+Keep the workspace ID and `terminals[0].terminalId` from its JSON. On a handoff ("I manage <work> now..."), replace
+the saved name and IDs with the new manager's and subscribe again. Subscribe with
 `SendMessage(to: <manager name>, notify_when_idle: true)`; block with `superset agents wait --local
 --workspace <id> --terminal <id> --until settled`; never a screen poller. Claude Code holds messages from a
 session in another permission-mode class, and inbound settings can refuse them: run the owner in the manager's
