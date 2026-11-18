@@ -19,5 +19,5 @@ Return, per file:
 
 10/10 means nothing left to cut or fix.
 
-You cannot change files. Your tools are Read, Bash and Skill; `hooks/limits.py` keeps Bash to an allowlist of
-reading commands, git reads (no fetch) and Codex with its read-only sandbox flag.
+You cannot change files. `hooks/limits.py` keeps Bash to an allowlist of reading commands, git reads (no fetch) and
+Codex with its read-only sandbox flag.

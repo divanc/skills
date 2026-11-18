@@ -24,7 +24,7 @@ BRANCH_READ = {"-a", "-r", "-v", "-vv", "--list", "--show-current", "--contains"
 BRANCH_PATTERN = {"--list", "--contains", "--merged", "--no-merged"}  # options that take a pattern or commit
 BROWSER_READ = {"list", "open", "navigate", "screenshot", "console"}
 SEP = {"&&", "||", ";", "|", "&", "(", ")", ";;", "|&"}
-REDIR = set("<>&")
+REDIR = set("<>&|")  # `>|` writes too
 
 
 def segments(cmd):
@@ -48,7 +48,8 @@ def segments(cmd):
 
 
 def commands(cmd):
-    """Simple commands in cmd with wrappers peeled: `env X=1 git push` is `git push`; `bash -c '<cmd>'` is <cmd>."""
+    """Simple commands in cmd with wrappers peeled: `env X=1 git push` is `git push`; `bash -c '<cmd>'` is <cmd>.
+    A wrapper and its own options come out as a command too, so `time -o FILE` is checked."""
     for w in segments(cmd):
         while w:
             tool = w[0].rsplit("/", 1)[-1]
@@ -58,7 +59,7 @@ def commands(cmd):
                 yield from commands(w[next(i for i, a in enumerate(w) if re.match(r"^-[a-zA-Z]*c[a-zA-Z]*$", a)) + 1])
                 w = []
             elif tool in WRAP:
-                w = w[1:]
+                own, w = w[:1], w[1:]
                 while w and (w[0].startswith("-") or re.match(r"^\w+=", w[0])):
                     if w[0] == "--":
                         w = w[1:]
@@ -66,7 +67,9 @@ def commands(cmd):
                     if tool == "env" and w[0] in ("-S", "--split-string") and len(w) > 1:
                         w = shlex.split(w[1]) + w[2:]  # env -S '<cmd>' runs <cmd>
                         break
-                    w = w[2:] if w[0] in WRAP[tool] else w[1:]
+                    n = 2 if w[0] in WRAP[tool] else 1
+                    own, w = own + w[:n], w[n:]
+                yield own
             else:
                 yield w
                 w = []
@@ -137,9 +140,9 @@ def reader(agent, w):
             return f"`{tool}` writes files"
         if tool == "sed" and ("i" in short_flags(w) or any(a.startswith(("-i", "--in-place")) for a in w)):
             return "sed -i edits files"
-    elif tool not in READ | EXTRA[agent]:
+    elif tool not in READ | EXTRA[agent] | WRAP.keys():
         return f"`{tool}` is not on the {agent}'s read-only list"
-    if (any(a.startswith("--output") for a in w) or tool in ("sort", "tree") and any(re.match(r"^-[a-zA-Z]*o", a) for a in w[1:])
+    if (any(a.startswith("--output") for a in w) or tool in ("sort", "tree", "time") and any(re.match(r"^-[a-zA-Z]*o", a) for a in w[1:])
             or tool == "uniq" and len([a for a in w[1:] if not a.startswith("-")]) > 1):
         return "an output file"
     if tool == "find" and {"-delete", "-exec", "-execdir", "-ok", "-fprint", "-fprint0", "-fprintf", "-fls"} & set(w):
@@ -182,7 +185,8 @@ def worker(w):
     sub, rest = (a or [""])[0], a[1:]
     pos = [x for x in rest if not x.startswith("-")]
     if sub == "push":
-        if {"--all", "--mirror"} & set(rest) or any(re.search(r"(^|[:/+])(main|deploy)$", x) for x in pos[1:]):
+        if {"--all", "--mirror"} & set(rest) or any(
+                x in (":", "+:") or "*" in x or re.search(r"(^|[:/+])(main|deploy)$", x) for x in pos[1:]):
             return "workers never push to main or deploy; push your branch"
         if len(pos) < 2 or any(re.match(r"^\+?(HEAD|@)$", x) for x in pos[1:]):  # the destination comes from config
             return "name the destination: `git push origin <branch>`"
@@ -215,8 +219,9 @@ def check(event):
     if tool != "Bash":
         return None
     cmd = inp.get("command", "")
-    merges = re.search(r"pulls/\d+/merge|\bgh\b.*\bpr\b.*\bmerge\b(?!-)", cmd) or any(
-        w[0].rsplit("/", 1)[-1] == "gh" and gh_words(strip_redirects(w))[:2] == ["pr", "merge"] for w in commands(cmd))
+    merges = re.search(r"pulls/\d+/merge", cmd) or any(  # parsed, and as tokens: gh, then pr, then merge
+        w[0].rsplit("/", 1)[-1] == "gh" and gh_words(strip_redirects(w))[:2] == ["pr", "merge"] for w in commands(cmd)) or any(
+        re.search(r"(^|\x00)(\S*/)?gh\x00(.*\x00)?pr\x00(.*\x00)?merge(\x00|$)", "\x00".join(w)) for w in segments(cmd))
     if merges:
         return "merging is divan's; no agent merges"
     if agent != "worker" and any(redirects_to_file(w) for w in segments(cmd)):  # before wrappers are peeled
@@ -314,6 +319,15 @@ def test():
     for c in ("git add -Av", "git add -vA", "git commit -am x", "git commit -va", "git clean -fd", "git clean -df"):
         assert B("worker", c), c
     assert B("manager", "sed -ni s/a/b/ f") and B("manager", "curl -sXPOST u") and not B("manager", "curl -sL https://x") and B("reviewer", "git branch -ad x")
+    for a in ("manager", "reviewer", "critic"):
+        for c in ("git status >| r.txt", "cat README.md >|r.txt", "bash -c 'ls >| r.txt'", "time -o /tmp/r ls",
+                  "time --output=/tmp/r ls", "time -o/tmp/r ls"):
+            assert B(a, c), (a, c)
+        assert not B(a, "time -p ls") and not B(a, "gh pr view 1 --json body --jq '.body | contains(\"merge\")'"), a
+    for c in ("git push origin :", "git push origin +:", "git push origin 'refs/heads/*:refs/heads/*'",
+              "git push origin refs/heads/main", "git push origin HEAD:refs/heads/deploy", "git push origin 'feat*'"):
+        assert B("worker", c), c
+    assert not B("worker", "git push origin feat:refs/heads/feat") and not B("worker", "time -o t.log git status")
     tmp.cleanup()
     print("ok")
 
