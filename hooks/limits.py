@@ -61,6 +61,67 @@ class Blocked(Exception):
 SESSIONS = os.path.join(os.environ.get("TMPDIR", "/tmp"), "divan-limits")  # session_id -> its main thread's agent
 
 
+def heredoc(cmd, i):
+    """(delimiter, quoted, `<<-`, end index) of the heredoc marker `<<[-]WORD` at i."""
+    j = i + 2 + (cmd[i + 2:i + 3] == "-")
+    while j < len(cmd) and cmd[j] in " \t":
+        j += 1
+    k = j
+    while k < len(cmd) and not cmd[k].isspace() and cmd[k] not in OPS:
+        k += 1
+    word = cmd[j:k]
+    return re.sub(r"['\"\\]", "", word), bool(re.search(r"['\"\\]", word)), cmd[i + 2:i + 3] == "-", k
+
+
+def skip_bodies(cmd, i, pending):
+    """Index after the heredoc bodies that start at i. A body is data; one whose delimiter is unquoted expands
+    $(...) and backticks, so such a body that has them blocks, as does a body with no closing delimiter."""
+    for delim, quoted, dash in pending:
+        while True:
+            if i >= len(cmd):
+                raise Blocked(f"heredoc `{delim}` has no closing line")
+            end = cmd.find("\n", i) % (len(cmd) + 1)
+            line = cmd[i:end]
+            i = end + 1
+            if (line.lstrip("\t") if dash else line) == delim:
+                break
+            if not quoted and re.search(r"\$\(|`", line):
+                raise Blocked("a heredoc with an unquoted delimiter runs its $(...)")
+    return i
+
+
+def strip_comments(cmd):
+    """cmd without its comments and heredoc bodies. An unquoted `#` that starts a word runs to the next newline, which
+    stays and so still ends the command; a backslash at a comment's end does not continue it (bash agrees)."""
+    out, q, i, pending = [], None, 0, []
+    while i < len(cmd):
+        ch = cmd[i]
+        if q != "'" and ch == "\\":
+            out.append(cmd[i:i + 2])
+            i += 2
+            continue
+        if q is None and ch == "#" and (i == 0 or cmd[i - 1].isspace() or cmd[i - 1] in OPS):
+            i = cmd.find("\n", i) % (len(cmd) + 1)
+            continue
+        if q is None and cmd.startswith("<<", i) and not cmd.startswith("<<<", i):
+            *marker, j = heredoc(cmd, i)
+            out.append(cmd[i:j])
+            pending.append(marker)
+            i = j
+            continue
+        if q is None and ch == "\n" and pending:
+            out.append(ch)
+            i, pending = skip_bodies(cmd, i + 1, pending), []
+            continue
+        if q is None and ch in "'\"":
+            q = ch
+        elif ch == q:
+            q = None
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def join_lines(cmd):
     """cmd with backslash-newline continuations removed, as the shell does outside single quotes."""
     out, q, i = [], None, 0
@@ -123,11 +184,21 @@ def backtick_end(cmd, i):
 
 def sub_end(cmd, i):
     """Index of the `)` closing a $( whose body starts at i, honouring quotes, escapes and nested substitutions."""
-    q, depth = None, 1
+    q, depth, pending = None, 1, []
     while i < len(cmd):
         ch = cmd[i]
         if q != "'" and ch == "\\":
             i += 2
+            continue
+        if q is None and cmd.startswith("<<", i) and not cmd.startswith("<<<", i):
+            *marker, i = heredoc(cmd, i)
+            pending.append(marker)
+            continue
+        if q is None and ch == "\n" and pending:
+            i, pending = skip_bodies(cmd, i + 1, pending), []
+            continue
+        if q is None and ch == "#" and cmd[i - 1].isspace():
+            i = cmd.find("\n", i) % (len(cmd) + 1)
             continue
         if q is None and ch in "'\"":
             q = ch
@@ -176,13 +247,14 @@ def substitutions(cmd):
 
 def segments(cmd):
     """Simple commands in cmd as word lists; $(...) and `...` bodies count as commands too."""
+    cmd = strip_comments(cmd)
     out = [seg for body in substitutions(cmd) for seg in segments(body)]
     lex = shlex.shlex(protect(join_lines(cmd)), posix=True, punctuation_chars=True)
-    lex.whitespace_split = True
+    lex.whitespace_split, lex.commenters = True, ""  # comments are already gone
     try:
         toks = [unprotect(t) for t in lex]
     except ValueError:
-        toks = cmd.split()
+        raise Blocked("unbalanced quotes; the hook cannot read the command")
     seg = []
     for t in toks + [";"]:
         if t in SEP:
@@ -302,6 +374,13 @@ def cluster(a, takes_value):
     return a[1:], False
 
 
+def long_opt(args, *names):
+    """True if args hold one of the long options in names, in full, with `=value`, or abbreviated: getopt and git take
+    any prefix (`--har` is `--hard`)."""
+    return any(len(n := a.split("=", 1)[0]) > 2 and a.startswith("--") and any(o.startswith(n) for o in names)
+               for a in args)
+
+
 def short_flags(args, values=""):
     """Single-letter flags in args; `values` are the letters that take a value, so `-am'fix: a'` is a and m, and
     `-mchange` is m alone."""
@@ -390,11 +469,12 @@ def reader(agent, w):
             return "sed -i edits files"
     elif tool not in READ | EXTRA[agent] | WRAP.keys():
         return f"`{tool}` is not on the {agent}'s read-only list"
-    if (tool in ("sort", "git") and any(a.startswith("--output") for a in w)
+    if (tool in ("sort", "git") and long_opt(w, "--output")
             or tool == "sort" and "o" in short_flags(w[1:], "ktoST") or tool == "tree" and "o" in short_flags(w[1:], "LPIo")
             or tool == "uniq" and len([a for a in w[1:] if not a.startswith("-")]) > 1):
         return "an output file"
-    if any(a.startswith(o) for o in RUNS_OR_WRITES.get(tool, ()) for a in w[1:]):
+    if any(long_opt(w[1:], o) if o.startswith("--") else any(a.startswith(o) for a in w[1:])
+           for o in RUNS_OR_WRITES.get(tool, ())):
         return f"`{tool}` with an option that runs a program or changes state"
     if tool == "find" and {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"} & set(w):
         return "find with -delete, -exec or -fprint"
@@ -403,7 +483,7 @@ def reader(agent, w):
         sub, rest = (a or [""])[0], a[1:]
         if any(o.startswith("-c") for o in opts):
             return "`git -c` can make git run any program"
-        if sub == "grep" and any(r.startswith(("-O", "--open-files-in-pager")) for r in rest):
+        if sub == "grep" and (any(r.startswith("-O") for r in rest) or long_opt(rest, "--open-files-in-pager")):
             return "`git grep -O` runs a program"
         if (sub not in GIT_READ or sub == "worktree" and rest[:1] != ["list"]
                 or sub == "stash" and rest[:1] not in (["list"], ["show"])
@@ -464,14 +544,14 @@ def worker_git(w):
         if len(pos) < 2 or any(re.match(r"^\+?(HEAD|@)$", x) for x in pos[1:]):  # the destination comes from config
             return "name the destination: `git push origin <branch>`"
     short = short_flags(rest, {"commit": "mFcCtSu", "checkout": "bB", "switch": "cC", "clean": "e"}.get(sub, ""))
-    sweeps = (sub == "add" and ({"A", "u"} & short or {"--all", "--update"} & set(rest))
+    sweeps = (sub == "add" and ({"A", "u"} & short or long_opt(rest, "--all", "--update"))
               or sub in ("add", "checkout", "restore") and SWEEP_PATHS & set(pos)
-              or sub == "commit" and ("a" in short or "--all" in rest)
+              or sub == "commit" and ("a" in short or long_opt(rest, "--all"))
               or sub == "stash" and rest[:1] not in (["list"], ["show"])
-              or sub in ("checkout", "switch") and ("f" in short or {"--force", "--discard-changes"} & set(rest))
+              or sub in ("checkout", "switch") and ("f" in short or long_opt(rest, "--force", "--discard-changes"))
               or sub == "restore" and not pos
-              or sub == "reset" and "--hard" in rest
-              or sub == "clean" and ("f" in short or "--force" in rest))
+              or sub == "reset" and long_opt(rest, "--hard")
+              or sub == "clean" and ("f" in short or long_opt(rest, "--force")))
     if sweeps:
         return f"`git {' '.join(a)}` touches files beyond your own; stage, restore and clean by explicit path"
     return None
@@ -782,6 +862,31 @@ def test():
     for c in ("sort -o out f", "sort --output=out f", "sort -ro out f", "tree -o out", "git log --output=x", "git diff --output x"):
         assert B("manager", c), c
     assert not B("manager", "sort -t, -k2 f") and not B("manager", "sort -to f") and not B("manager", "tree -L 2")
+    # Comments end at a newline; git and getopt take abbreviated long options
+    cases = {"manager": "ls # comment\nrm victim", "worker": "git status # comment\ngit push origin main",
+             "reviewer": "ls # comment\ntouch victim", "critic": "pwd # comment\nsuperset browser eval --code bad"}
+    for a, c in cases.items():
+        assert B(a, c) and B(a, c.replace(" # comment", " # comment \\")) and B(a, c.replace("\n", " #x\n")), (a, c)
+    for a in ("manager", "reviewer", "critic"):
+        for c in ("ls # rm x", "echo 'a # b' && ls", "echo a#b", "ls # $(rm x)", "echo \"#\" # c"):
+            assert not B(a, c), (a, c)
+        for c in ("echo 'a\n#' && rm x", "sort --out=f g", "sort --outp f g", "sort --co=sh f", "git log --outp=x",
+                  "git grep --open x", "date --se 1", "file --comp m"):
+            assert B(a, c), (a, c)
+        assert not B(a, "git log --output-indicator-new=+ -1"), a
+        assert not B(a, 'echo \\" # "; rm x') and B(a, "echo a#b; rm x"), a  # escaped quote; # inside a word
+        assert B(a, "echo 'unclosed; rm x") and B(a, 'echo "a'), a
+        for c in ("cat <<'EOF'\nit's data; rm x\nEOF", "cat <<EOF\nit's plain\nEOF\nls", "cat <<-EOF\n\tit's\n\tEOF",
+                  "echo \"$(cat <<'EOF'\nfix: it's done (really)\nEOF\n)\""):
+            assert not B(a, c), (a, c)
+        for c in ("cat <<'EOF'\nx\nEOF\nrm y", "cat <<EOF\n$(rm y)\nEOF", "cat <<EOF\nno end", "cat <<EOF > out\nx\nEOF",
+                  "echo \"$(cat <<'EOF'\nit's\nEOF\n)\"; rm y"):
+            assert B(a, c), (a, c)
+    assert not B("worker", "git commit -m \"$(cat <<'EOF'\nfix: it's done\n\nCo-Authored-By: x\nEOF\n)\"")
+    for c in ("git reset --har", "git clean --fo", "git add --al", "git add --upd", "git commit --al -m x",
+              "git checkout --forc main", "git switch --disc x", "git push --al origin", "git push --mir origin"):
+        assert B("worker", c), c
+    assert not B("worker", "git commit --amend --no-edit") and not B("worker", "git commit --author=x -m y")
     here = os.getcwd()
     os.chdir(ev)  # relative paths would resolve inside the evidence folder; they block anyway
     for c in ("superset browser screenshot --out shot.png", "superset browser screenshot --out ./s.png",
