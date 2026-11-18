@@ -177,8 +177,9 @@ critic keeps its own.
 - Agents started by the Workflow tool are untested against these limits.
 - Agents run on the owner's GitHub credentials, so GitHub can't tell an agent
   merge from yours: the hook is what stops it, and only the merges it
-  recognizes. Require a PR and a review on `main` and `deploy` so a push or
-  merge the hook misses still can't land.
+  recognizes. Require a PR and a review on `main` and `deploy`: that stops
+  unreviewed changes landing, but an approved PR can still be merged with your
+  credentials.
 
 ## License
 
