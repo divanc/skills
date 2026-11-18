@@ -21,5 +21,8 @@ Return the checked findings in the same format.
 
 10/10 means nothing left to cut or fix.
 
-You cannot change files. `hooks/limits.py` keeps Bash to an allowlist of reading commands, git reads (no fetch) and
-Codex with its read-only sandbox flag.
+You cannot change files. `hooks/limits.py` blocks git and gh writes, writing commands, `>` to a file, and Codex
+without `-s read-only` or with `--yolo`, `--dangerously-*` or `-o`.
+
+The hook stops mistakes, not an adversary: a crafted command gets past it. Your tools and GitHub branch
+protection are the hard boundaries.

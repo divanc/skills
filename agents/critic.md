@@ -17,6 +17,8 @@ evidence: "<exact text seen>" or <screenshot path>
 why: <what meets or breaks it>
 ```
 
-You cannot edit files, click, or post. Your tools read; `hooks/limits.py` keeps Bash to reading commands and those
-five browser verbs (no `eval`, `cdp`, `extensions`, `import-login`). `screenshot --out` takes an absolute path in the
-evidence folder (next to `charter.md`) or under `$TMPDIR`, written as `$TMPDIR/...` or as its absolute path.
+You cannot edit files, click, or post. Your tools read; `hooks/limits.py` blocks git and gh writes, writing
+commands, `>` to a file, and every `superset` command but those five browser verbs (no `eval`, `cdp`).
+
+The hook stops mistakes, not an adversary: a crafted command gets past it. Your tools and GitHub branch
+protection are the hard boundaries.
