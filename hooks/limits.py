@@ -71,8 +71,11 @@ def why(agent, w):
     filters = {"-l", "--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at"}
     reads = (sub == "branch" and {a.split("=")[0] for a in args[1:] if a.startswith("-")} <= BRANCH_READ
              and (not pos or filters & {a.split("=")[0] for a in args[1:]})
-             or sub == "remote" and (args[1:] in ([], ["-v"]) or args[1:2] == ["get-url"]))
-    if tool == "git" and sub not in GIT_READ and not reads:
+             or sub == "remote" and (args[1:] in ([], ["-v"]) or args[1:2] == ["get-url"])
+             or sub == "config" and (args[1:2] in (["get"], ["list"])
+                                     or {"--get", "--get-all", "--list", "-l", "--get-regexp"} & set(args)))
+    if tool == "git" and (sub not in GIT_READ and not reads
+                          or any(len(o := a.split("=")[0]) > 2 and "--output".startswith(o) for a in args)):
         return f"`git {sub}` writes; git is read-only here"
     if tool == "gh" and not (ops[2:3] and ops[2] in GH_READ or ops[1:2] == ["search"] or ops[1:3] == ["auth", "status"]
                              or ops[1:2] == ["api"] and not api_writes(line)):
@@ -137,7 +140,8 @@ def test():
         "reviewer": ["touch x", "git commit -m x", "cat <<EOF\nx\nEOF\ntouch y", "codex exec x",
                      "codex exec --yolo -s read-only x", "codex exec -s read-only -o f x"],
         "critic": ["superset browser eval 1", "touch x", "gh pr merge 1", "git branch new", "git branch -d x",
-                   "gh api --method GET x -X POST"]}
+                   "gh api --method GET x -X POST", "git log --output=f", "git diff --outp f", "git config user.name x",
+                   "git config --unset user.name", "git config set user.name x"]}
     allowed = {
         "manager": ["npm test", "python3 -m pytest -q", "claude plugin validate .", "superset agents wait",
                     "git log -3 && git diff --stat", "git status 2>&1 | head", "gh pr view 3 --json state"],
@@ -148,7 +152,9 @@ def test():
         "critic": ["superset browser screenshot --out /tmp/s.png", "superset --json browser list",
                    "git log --grep '#12'", "echo 'a # b' && ls", "rg '>' README.md", "grep \"a|b\" f",
                    "git branch --contains HEAD", "git branch --list 'feat/*'", "git branch --merged=main -v",
-                   "gh api --method GET search/issues -f q=x", "gh pr --repo o/r view 1"]}
+                   "gh api --method GET search/issues -f q=x", "gh pr --repo o/r view 1", "git log --oneline -3",
+                   "git config --get user.name", "git config --show-origin --list", "git config get remote.origin.url",
+                   "git config -l", "git log --output-indicator-new=+ -1"]}
     assert all(B("divan:" + a, c) for a, cs in blocked.items() for c in cs)
     assert not any(B("divan:" + a, c) for a, cs in allowed.items() for c in cs)
     assert not B("divan:worker", "git status", "s1") and B("general-purpose", "git push origin main", "s1", "a1")
