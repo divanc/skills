@@ -35,11 +35,12 @@ SHELLS = ("sh", "bash", "zsh", "dash", "ksh", "fish")
 RISKY_ENV = r"^(GIT_\w*|PAGER|EDITOR|VISUAL|BASH_ENV|ENV|PATH|LESSOPEN|LESSCLOSE|LD_\w+|DYLD_\w+)="  # change what runs
 PREFIX_WORDS = {"if", "then", "else", "elif", "while", "until", "do", "!", "{"}  # shell words before a command
 END_WORDS = {"fi", "done", "}"}
+SHORT_VALUES = {"commit": "mFcCtSu", "checkout": "bB", "switch": "cC", "clean": "e", "restore": "s"}  # take a value
 LONG_VALUES = {  # git long options that take the next word as their value
     "commit": ("--message", "--file", "--author", "--date", "--template", "--reuse-message", "--reedit-message",
                "--fixup", "--squash", "--cleanup", "--trailer", "--pathspec-from-file"),
     "checkout": ("--orphan", "--conflict", "--pathspec-from-file"), "switch": ("--create", "--force-create", "--orphan"),
-    "clean": ("--exclude",), "add": ("--chmod", "--pathspec-from-file")}
+    "clean": ("--exclude",), "add": ("--chmod", "--pathspec-from-file"), "restore": ("--source", "--pathspec-from-file")}
 SWEEP_PATHS = {".", ":/", ":", "*", ":/*"}  # pathspecs that take the whole tree
 RUNS_OR_WRITES = {"rg": ("--pre",), "sort": ("--compress-program",), "file": ("-C", "--compile"),
                   "date": ("-s", "--set")}  # options of read tools that run a program or change state
@@ -397,22 +398,32 @@ def long_opt(args, *names):
                for a in args)
 
 
-def short_flags(args, values="", long_values=()):
-    """Single-letter flags in args; `values` are the letters that take a value, so `-am'fix: a'` is a and m, and
-    `-mchange` is m alone. A long option in long_values takes the next word too: `--message -a` sets no flag."""
-    out, skip = set(), False
-    for a in args:
-        if skip:
-            skip = False
-            continue
+def split_args(args, values="", long_values=()):
+    """(short flags, long options, operands) of args, read as git and getopt read them: clusters through cluster(),
+    `values` are the letters that take a value (`-am'fix: a'` is a and m; `-mchange` is m alone), a long option in
+    long_values takes the next word (`--message -a` sets no flag), and `--` makes every later word an operand."""
+    short, longs, pos, i = set(), [], [], 0
+    while i < len(args):
+        a = args[i]
         if a == "--":
+            pos += args[i + 1:]
             break
-        if a.startswith("--") and "=" not in a:
-            skip = long_opt([a], *long_values)
+        if a.startswith("--"):
+            longs.append(a)
+            i += 1 + ("=" not in a and long_opt([a], *long_values))
         elif re.match(r"^-[a-zA-Z]", a):
-            letters, skip = cluster(a, lambda c: c in values)
-            out |= set(letters)
-    return out
+            letters, value_next = cluster(a, lambda c: c in values)
+            short |= set(letters)
+            i += 1 + value_next
+        else:
+            pos.append(a)
+            i += 1
+    return short, longs, pos
+
+
+def short_flags(args, values="", long_values=()):
+    """The short flags of args (see split_args)."""
+    return split_args(args, values, long_values)[0]
 
 
 def option_values(w, short, long):
@@ -560,16 +571,15 @@ def worker_git(w):
             return "workers never push to main or deploy; push your branch"
         if len(pos) < 2 or any(re.match(r"^\+?(HEAD|@)$", x) for x in pos[1:]):  # the destination comes from config
             return "name the destination: `git push origin <branch>`"
-    short = short_flags(rest, {"commit": "mFcCtSu", "checkout": "bB", "switch": "cC", "clean": "e"}.get(sub, ""),
-                        LONG_VALUES.get(sub, ()))
-    sweeps = (sub == "add" and ({"A", "u"} & short or long_opt(rest, "--all", "--update"))
+    short, longs, pos = split_args(rest, SHORT_VALUES.get(sub, ""), LONG_VALUES.get(sub, ()))
+    sweeps = (sub == "add" and ({"A", "u"} & short or long_opt(longs, "--all", "--update"))
               or sub in ("add", "checkout", "restore") and SWEEP_PATHS & set(pos)
-              or sub == "commit" and ("a" in short or long_opt(rest, "--all"))
+              or sub == "commit" and ("a" in short or long_opt(longs, "--all"))
               or sub == "stash" and rest[:1] not in (["list"], ["show"])
-              or sub in ("checkout", "switch") and ("f" in short or long_opt(rest, "--force", "--discard-changes"))
+              or sub in ("checkout", "switch") and ("f" in short or long_opt(longs, "--force", "--discard-changes"))
               or sub == "restore" and not pos
-              or sub == "reset" and long_opt(rest, "--hard")
-              or sub == "clean" and ("f" in short or long_opt(rest, "--force")))
+              or sub == "reset" and long_opt(longs, "--hard")
+              or sub == "clean" and ("f" in short or long_opt(longs, "--force")))
     if sweeps:
         return f"`git {' '.join(a)}` touches files beyond your own; stage, restore and clean by explicit path"
     return None
@@ -604,10 +614,10 @@ def brief_path(p):
 def session_agent(event):
     """The divan agent whose limits apply: the event's own, else the one running its session's main thread, so a
     worker's general-purpose subagent is still a worker. A plain session's main thread stays unlimited."""
-    own = (event.get("agent_type") or "").removeprefix("divan:")
+    scope, _, own = (event.get("agent_type") or "").rpartition(":")
     sid = re.sub(r"[^\w-]", "", event.get("session_id") or "")
     path = os.path.join(SESSIONS, sid)
-    if own in AGENTS:
+    if scope == "divan" and own in AGENTS:  # only this plugin's agents; a bare `worker` is someone else's
         if sid and not event.get("agent_id"):  # main thread
             os.makedirs(SESSIONS, exist_ok=True)
             with open(path, "w") as f:
@@ -956,6 +966,18 @@ def test():
         assert a != "worker" or not B(a, "git commit -m 'run gh pr merge later'")
         for c in ("gh --unknown x pr merge 1", "gh pr --body-file x merge 1", "env gh pr merge 1", "if true; then gh pr merge 1; fi"):
             assert B(a, c), (a, c)
+    # Sweeps read with split_args; only divan:-scoped agents count
+    for c in ("git commit -m --all", "git add -- --all", "git commit -m -a x", "git add --chmod -A f", "git restore -s HEAD~1 a.py",
+              "git checkout -b x -- a.py"):
+        assert not B("worker", c), c
+    for c in ("git add --all", "git commit -am x", "git add -- .", "git restore -s HEAD~1", "git checkout -b x .",
+              "git restore --source HEAD~1"):
+        assert B("worker", c), c
+    for t in ("worker", "other:worker", "manager", "divanx:reviewer"):
+        assert not check({"agent_type": t, "session_id": "s9", "tool_name": "Bash", "tool_input": {"command": "gh pr merge 1"}}), t
+    assert not E("s9", "general-purpose", "a9", "gh pr merge 1")  # a bare `worker` main thread recorded nothing
+    assert not B("reviewer", "codex exec -s read-only - <<'EOF'\nReview a.md, changed since main (git diff main), "
+                             "against this bar: the charter's Great.\nReturn, per file: \"<file>  score: N/10\".\nEOF")
     here = os.getcwd()
     os.chdir(ev)  # relative paths would resolve inside the evidence folder; they block anyway
     for c in ("superset browser screenshot --out shot.png", "superset browser screenshot --out ./s.png",

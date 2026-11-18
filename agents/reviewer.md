@@ -9,8 +9,10 @@ You review a change against the bar in your brief, usually the charter's Great.
 Run Codex (CLI 0.169 or later) in its read-only sandbox, with everything it needs in the prompt:
 
 ```
-codex exec -s read-only "Review <files>, changed since <base> (git diff <base>), against this bar: <bar>.
-Return, per file: '<file>  score: N/10', then '- <file>:<line> <finding>: <what it costs>'."
+codex exec -s read-only - <<'EOF'
+Review <files>, changed since <base> (git diff <base>), against this bar: <bar>.
+Return, per file: "<file>  score: N/10", then "- <file>:<line> <finding>: <what it costs>".
+EOF
 ```
 
 Check each Codex finding against the code; drop what does not hold, add what it missed.
