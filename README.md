@@ -142,25 +142,27 @@ divan:<name>`); the reviewer and critic are the manager's subagents.
 Requirements:
 
 - Paradev, for the `superset` CLI that launches and watches sessions.
-- `python3`, for the hook.
+- Claude Code 2.1.295 or later, and `python3`, for the hook. The hook fails
+  closed: without `python3`, Bash and Write are blocked in every session that
+  loads the plugin.
 - Codex CLI, for the reviewer.
 - Owner and manager sessions in the same permission mode; otherwise
   cross-session messages wait for approval.
 
 | agent | does | can't | enforced by |
 |---|---|---|---|
-| manager | briefs workers, verifies, steers | edit, commit, merge; write anywhere but its briefs folder | tools (no Edit); hook: Write only to `briefs/`, git and gh read-only, writing Bash commands denied |
-| worker | one briefed task in its worktree | merge a PR, push to `main` or `deploy` | hook |
-| reviewer | scores files with Codex, returns findings | change files | tools; hook keeps Bash to reads and read-only Codex |
-| critic | judges what users see against the charter | edit, post | tools (Slack read-only); hook keeps Bash to reads |
+| manager | briefs workers, verifies, runs checks, steers | edit, commit, merge, fetch; write outside its `briefs/` | tools (no Edit); hook: Write only to files directly in the `briefs/` beside `charter.md` (path resolved); git and gh read-only; writing Bash commands denied, also behind `env`, `nohup`, `xargs`, `sudo`, `bash -c` and the like |
+| worker | one briefed task in its worktree | merge; push to `main` or `deploy`, even wrapped; `git add -A` or `.`, `commit -a`, `stash` (but `list`, `show`), `checkout .`, pathless `restore`, `reset --hard`, `clean -f` | hook |
+| reviewer | scores files with Codex, returns findings | change files; run Codex outside its read-only sandbox | tools; hook: Bash reads only, Codex only as `exec -s read-only` or `review -c sandbox_mode="read-only"` |
+| critic | judges what users see against the charter | edit, post, click; `curl` | tools (WebFetch, Slack read-only); hook: Bash reads only, `superset browser` only `list`, `open`, `navigate`, `screenshot`, `console` |
 
 No agent merges: `gh pr merge` is blocked for all four.
 
 ### Gaps
 
-- The hook matches Bash as command text, so a command it allows can still be
-  made to write (`sed`'s `w`, a script on disk).
-- Nothing confines a worker to its worktree; its brief names its files.
+- The hook matches Bash as command text, so a command that writes through its
+  own syntax still gets past it: `sed`'s `w`, a test, a script.
+- Nothing confines a worker to its brief's files.
 - Agents run on the owner's GitHub credentials, so GitHub can't tell an agent
   merge from yours: the hook is what stops it. Require a PR and a review on
   `main` and `deploy` so a push the hook misses still can't land.
