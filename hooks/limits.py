@@ -11,8 +11,10 @@ READ = {"git", "gh", "ls", "cat", "head", "tail", "wc", "rg", "grep", "jq", "pwd
         "stat", "file", "tree", "sort", "uniq", "cut", "which", "true", "cd", "find", "test", "["}
 EXTRA = {"reviewer": {"codex"}, "critic": {"superset", "paradev"}}
 WRITE = {"rm", "rmdir", "mv", "cp", "touch", "tee", "mkdir", "ln", "chmod", "chown", "dd", "truncate", "install", "rsync"}
-WRAP = {"env", "command", "nice", "time", "nohup", "xargs", "sudo", "exec"}
-WRAP_VALUE = {"-n", "-I", "-P", "-L", "-d", "-E", "-s", "-u", "-g", "-C"}  # wrapper options that take a value
+WRAP = {  # wrapper: its options that take a value
+    "env": {"-u", "--unset", "-C", "--chdir"}, "nice": {"-n", "--adjustment"}, "nohup": set(), "command": set(),
+    "sudo": {"-u", "-g", "-C", "-p", "-U", "-r", "-t", "-D", "-h"}, "time": {"-o", "-f"}, "exec": {"-a"},
+    "xargs": {"-I", "-n", "-P", "-L", "-d", "-E", "-s", "-a"}}
 GIT_READ = {"status", "log", "diff", "show", "rev-parse", "ls-files", "grep", "blame", "describe", "shortlog",
             "cat-file", "ls-tree", "merge-base", "rev-list", "worktree", "branch", "remote", "stash"}
 GH_READ = {"view", "list", "diff", "checks", "status", "watch"}
@@ -58,7 +60,13 @@ def commands(cmd):
             elif tool in WRAP:
                 w = w[1:]
                 while w and (w[0].startswith("-") or re.match(r"^\w+=", w[0])):
-                    w = w[2:] if w[0] in WRAP_VALUE else w[1:]
+                    if w[0] == "--":
+                        w = w[1:]
+                        break
+                    if tool == "env" and w[0] in ("-S", "--split-string") and len(w) > 1:
+                        w = shlex.split(w[1]) + w[2:]  # env -S '<cmd>' runs <cmd>
+                        break
+                    w = w[2:] if w[0] in WRAP[tool] else w[1:]
             else:
                 yield w
                 w = []
@@ -84,6 +92,11 @@ def git_args(w):
             i += 1
         i += 1
     return w[i:], path
+
+
+def short_flags(args):
+    """Single-letter flags in args, clusters split: `-Av` is A and v."""
+    return {c for a in args if re.match(r"^-[a-zA-Z]+$", a) for c in a[1:]}
 
 
 def option_values(w, short, long):
@@ -122,7 +135,7 @@ def reader(agent, w):
     if agent == "manager":
         if tool in WRITE:
             return f"`{tool}` writes files"
-        if tool == "sed" and any(a.startswith("-i") or a == "--in-place" for a in w):
+        if tool == "sed" and ("i" in short_flags(w) or any(a.startswith(("-i", "--in-place")) for a in w)):
             return "sed -i edits files"
     elif tool not in READ | EXTRA[agent]:
         return f"`{tool}` is not on the {agent}'s read-only list"
@@ -138,7 +151,8 @@ def reader(agent, w):
             return "`git -c` can make git run any program"
         if (sub not in GIT_READ or sub == "worktree" and rest[:1] != ["list"]
                 or sub == "stash" and rest[:1] not in (["list"], ["show"])
-                or sub == "branch" and (any(r.split("=")[0] not in BRANCH_READ for r in rest if r.startswith("-"))
+                or sub == "branch" and (any(f"-{c}" not in BRANCH_READ for c in short_flags(rest) - {"v"})
+                                        or any(r.split("=")[0] not in BRANCH_READ for r in rest if r.startswith("--"))
                                         or any(not r.startswith("-") for r in rest) and not BRANCH_PATTERN & set(rest))
                 or sub == "remote" and rest not in ([], ["-v"]) and rest[:1] not in (["show"], ["get-url"])):
             return f"`git {sub}` writes; git is read-only here"
@@ -154,7 +168,8 @@ def reader(agent, w):
         return "codex runs only in its read-only sandbox: `exec -s read-only` or `review -c sandbox_mode=\"read-only\"`"
     if tool in ("superset", "paradev") and agent == "critic" and (w[1:2] != ["browser"] or (w[2:3] or [""])[0] not in BROWSER_READ):
         return "the critic uses only `superset browser list|open|navigate|screenshot|console`"
-    if tool == "curl" and any(re.match(r"^-[XdFTOo]|^--(data|form|upload-file|output|request|json)", a) for a in w[1:]):
+    if tool == "curl" and (set("XdFTOo") & ({a[1] for a in w[1:] if re.match(r"^-[a-zA-Z]", a)} | short_flags(w[1:]))
+                           or any(re.match(r"^--(data|form|upload-file|output|request|json)", a) for a in w[1:])):
         return "curl only reads: no method, body, upload or output file"
     return None
 
@@ -171,13 +186,14 @@ def worker(w):
             return "workers never push to main or deploy; push your branch"
         if len(pos) < 2 or any(re.match(r"^\+?(HEAD|@)$", x) for x in pos[1:]):  # the destination comes from config
             return "name the destination: `git push origin <branch>`"
-    sweeps = (sub == "add" and ({"-A", "--all"} & set(rest) or "." in pos)
-              or sub == "commit" and any(r == "--all" or re.match(r"^-[a-zA-Z]*a", r) for r in rest)
+    short = short_flags(rest)
+    sweeps = (sub == "add" and ("A" in short or "--all" in rest or "." in pos)
+              or sub == "commit" and ("a" in short or "--all" in rest)
               or sub == "stash" and rest[:1] not in (["list"], ["show"])
               or sub in ("checkout", "restore") and "." in pos
               or sub == "restore" and not pos
               or sub == "reset" and "--hard" in rest
-              or sub == "clean" and any(r == "--force" or re.match(r"^-[a-zA-Z]*f", r) for r in rest))
+              or sub == "clean" and ("f" in short or "--force" in rest))
     if sweeps:
         return f"`git {' '.join(a)}` touches files beyond your own; stage, restore and clean by explicit path"
     return None
@@ -199,10 +215,12 @@ def check(event):
     if tool != "Bash":
         return None
     cmd = inp.get("command", "")
-    merges = re.search(r"pulls/\d+/merge", cmd) or any(
+    merges = re.search(r"pulls/\d+/merge|\bgh\b.*\bpr\b.*\bmerge\b(?!-)", cmd) or any(
         w[0].rsplit("/", 1)[-1] == "gh" and gh_words(strip_redirects(w))[:2] == ["pr", "merge"] for w in commands(cmd))
     if merges:
         return "merging is divan's; no agent merges"
+    if agent != "worker" and any(redirects_to_file(w) for w in segments(cmd)):  # before wrappers are peeled
+        return f"{agent}: output redirect to a file"
     for w in commands(cmd):
         if agent == "worker":
             why = worker(strip_redirects(w))
@@ -263,7 +281,7 @@ def test():
         assert B("critic", c), c
     assert not B("critic", "superset browser screenshot --out /tmp/s.png")
     assert not check({"tool_name": "Bash", "tool_input": {"command": "gh pr merge 1"}})  # plain sessions untouched
-    # Codex round 2 bypasses, each must block
+    # Wrapper and option regressions
     for a in ("manager", "worker", "reviewer", "critic"):
         assert B(a, "gh pr --repo o/r merge 1") and B(a, "gh -R o/r pr merge 1") and B(a, "bash -lc 'gh pr merge 1'"), a
     for c in ("bash -lc 'git push origin HEAD:main'", "sh -ec 'git push origin main'", "git push", "git push origin",
@@ -281,6 +299,21 @@ def test():
                   "git remote -v", "git remote get-url origin", "gh api repos/o/r/pulls", "gh api -X GET repos/o/r",
                   "gh --repo o/r pr view 1", "sort -r a"):
             assert not B(a, c), (a, c)
+    wrapped = ("env --unset FOO {}", "env -u FOO {}", "env -C /tmp {}", "env -S '{}'", "env FOO=1 BAR=2 {}",
+               "nice -n 5 {}", "sudo -u root {}", "xargs -I x -n 1 -P 2 {}", "time -p {}", "command -p {}",
+               "exec -a name {}", "nohup {}", "env -- {}")
+    for a in ("manager", "worker", "reviewer", "critic"):
+        for f in wrapped:
+            assert B(a, f.format("gh pr merge 1")), (a, f)
+        assert B(a, "gh pr --unknown x merge 1"), a  # raw-text merge check
+    for f in wrapped:
+        assert B("manager", f.format("rm target")) and B("worker", f.format("git push origin HEAD:main")), f
+    for a in ("manager", "reviewer", "critic"):
+        assert B(a, "bash -c 'printf ok' > target") and B(a, "env bash -lc 'ls' >> target"), a
+        assert not B(a, "gh pr view 1 --json mergeable") and not B(a, "git branch -av"), a
+    for c in ("git add -Av", "git add -vA", "git commit -am x", "git commit -va", "git clean -fd", "git clean -df"):
+        assert B("worker", c), c
+    assert B("manager", "sed -ni s/a/b/ f") and B("manager", "curl -sXPOST u") and not B("manager", "curl -sL https://x") and B("reviewer", "git branch -ad x")
     tmp.cleanup()
     print("ok")
 
