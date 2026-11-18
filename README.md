@@ -155,8 +155,8 @@ Requirements:
 | critic | judges what users see against the charter | edit, post, click, `curl` | tools (WebFetch, Slack read-only); hook: the browser only looks; screenshots only to the evidence folder or `$TMPDIR` |
 
 The hook also checks commands inside wrappers (`env`, `xargs`, `bash -c`, ...),
-and blocks options it doesn't know on git, wrappers, shells and `curl`. The
-exact rules are in `hooks/limits.py`.
+and blocks unknown git global options and unknown options on wrappers, shells
+and `curl`. The exact rules are in `hooks/limits.py`.
 
 No divan agent merges: `gh pr merge` is blocked for all four. Your own session
 isn't limited, even when it spawns divan subagents. Any other subagent a divan
