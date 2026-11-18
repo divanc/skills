@@ -109,8 +109,44 @@ def unprotect(t):
     return "".join(chr(ord(ch) - STAND_IN) if ord(ch) >= STAND_IN else ch for ch in t)
 
 
+def backtick_end(cmd, i):
+    """Index of the backtick closing one whose body starts at i; quotes inside it block (bash reads them oddly)."""
+    while i < len(cmd) and cmd[i] != "`":
+        if cmd[i] in "'\"":
+            raise Blocked("quotes inside backticks; use $(...)")
+        i += 2 if cmd[i] == "\\" else 1
+    if i >= len(cmd):
+        raise Blocked("cannot tell where a backtick substitution ends")
+    return i
+
+
+def sub_end(cmd, i):
+    """Index of the `)` closing a $( whose body starts at i, honouring quotes, escapes and nested substitutions."""
+    q, depth = None, 1
+    while i < len(cmd):
+        ch = cmd[i]
+        if q != "'" and ch == "\\":
+            i += 2
+            continue
+        if q is None and ch in "'\"":
+            q = ch
+        elif ch == q:
+            q = None
+        elif q != "'" and cmd.startswith("$(", i):
+            i = sub_end(cmd, i + 2)
+        elif q is None and ch == "`":
+            i = backtick_end(cmd, i + 1)
+        elif q is None and ch in "()":
+            depth += 1 if ch == "(" else -1
+            if not depth:
+                return i
+        i += 1
+    raise Blocked("cannot tell where a $(...) ends")
+
+
 def substitutions(cmd):
-    """Bodies of $(...) and `...` in cmd, skipping single-quoted text (literal there) and $((arithmetic))."""
+    """Bodies of $(...) and `...` in cmd, skipping single-quoted text (literal there) and $((arithmetic)). Where the
+    end of a body is unsure (unclosed, a `case` whose `)` ends it early, quotes in backticks) the command blocks."""
     out, q, i = [], None, 0
     while i < len(cmd):
         ch = cmd[i]
@@ -118,15 +154,14 @@ def substitutions(cmd):
             i += 2
             continue
         if q != "'" and cmd.startswith("$(", i) and not cmd.startswith("$((", i):
-            depth, j = 1, i + 2
-            while j < len(cmd) and depth:
-                depth += {"(": 1, ")": -1}.get(cmd[j], 0)
-                j += 1
-            out.append(cmd[i + 2:j - 1])
-            i = j
+            j = sub_end(cmd, i + 2)
+            if re.search(r"\bcase\b", cmd[i + 2:j]):
+                raise Blocked("`case` inside $(...)")
+            out.append(cmd[i + 2:j])
+            i = j + 1
             continue
         if q != "'" and ch == "`":
-            j = cmd.find("`", i + 1) % (len(cmd) + 1)
+            j = backtick_end(cmd, i + 1)
             out.append(cmd[i + 1:j])
             i = j + 1
             continue
@@ -361,7 +396,7 @@ def reader(agent, w):
     if tool in ("superset", "paradev") and agent == "critic" and (w[1:2] != ["browser"] or (w[2:3] or [""])[0] not in BROWSER_READ):
         return "the critic uses only `superset browser list|open|navigate|screenshot|console`"
     if tool in ("superset", "paradev") and agent == "critic" and not all(
-            os.path.isabs(p) and evidence_or_tmp(p) for p in map(os.path.expanduser, option_values(w, "--out", "--out"))):
+            os.path.isabs(p) and evidence_or_tmp(p) for p in map(expand_out, option_values(w, "--out", "--out"))):
         return "screenshots go to an absolute path in the evidence folder (next to charter.md) or $TMPDIR"
     if tool == "curl":
         rest = w[1:]
@@ -408,6 +443,12 @@ def worker_git(w):
     if sweeps:
         return f"`git {' '.join(a)}` touches files beyond your own; stage, restore and clean by explicit path"
     return None
+
+
+def expand_out(p):
+    """A screenshot path with ~ and $TMPDIR (only that variable) expanded."""
+    tmp = os.environ.get("TMPDIR", "")
+    return os.path.expanduser(p.replace("${TMPDIR}", tmp).replace("$TMPDIR", tmp))
 
 
 def evidence_or_tmp(p):
@@ -674,6 +715,17 @@ def test():
                   "BASH_ENV=x.sh bash -c 'ls'", "gh $X 1"):
             assert B(a, c), (a, c)
         assert not B(a, "LC_ALL=C sort f"), a
+    # Substitutions read with quotes; an unsure end blocks
+    for a in ("manager", "reviewer", "critic"):
+        for c in ('echo "$(printf \')\'; rm victim)"', "echo \"$(printf ')'; gh pr merge 1)\"", "echo $(echo \"(\"; rm x)",
+                  "echo `printf ')'; rm x`", "echo \"$(case x in a) rm y;; esac)\"", "echo \"$(ls", "echo `ls", "echo `printf '%s' x`"):
+            assert B(a, c), (a, c)
+        for c in ("echo \"$(git log -1 --format='%s (%h)')\"", "echo \"$(echo \\\")\\\")\"", "echo `git status`"):
+            assert not B(a, c), (a, c)
+    assert B("worker", "echo \"$(printf ')'; gh pr merge 1)\"")
+    for c in ('superset browser screenshot --out "$TMPDIR/s.png"', "superset browser screenshot --out ${TMPDIR}/s.png"):
+        assert not B("critic", c), c
+    assert B("critic", "superset browser screenshot --out $HOME/s.png")
     here = os.getcwd()
     os.chdir(ev)  # relative paths would resolve inside the evidence folder; they block anyway
     for c in ("superset browser screenshot --out shot.png", "superset browser screenshot --out ./s.png",

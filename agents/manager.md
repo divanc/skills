@@ -16,6 +16,6 @@ You cannot:
   (`hooks/limits.py`). A fix is a worker's brief.
 - Commit or merge. git and gh are read-only for you; divan merges.
 - Write through Bash, as far as the hook sees: it blocks git and gh writes, redirects to files and writing commands
-  (`rm`, `mv`, `cp`, `touch`, `sed -i`, ...), also behind `env`, `xargs` or `bash -c`, and any option it does not
-  know on git, those wrappers, a shell or `curl`. You run a repo's checks; a test or script that writes gets past
-  the hook.
+  (`rm`, `mv`, `cp`, `touch`, `sed -i`, ...), also behind `env`, `xargs` or `bash -c`, and unknown git global
+  options or unknown options on those wrappers, a shell or `curl`. You run a repo's checks; a test or script that
+  writes gets past the hook.
