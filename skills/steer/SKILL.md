@@ -5,7 +5,7 @@ description: Use on every report from an agent below you, on any plan change, an
 
 # Steering against the charter
 
-Re-read `charter.md` in the work's evidence folder first, whole. Your memory of it drifts; the file does not.
+Re-read `charter.md` in the work's evidence folder first, whole.
 After a context summary, the summary is a claim too: re-read the charter and the last report's evidence.
 On a plan change, run checks 1, 4 and 5 on the new plan before announcing it.
 
@@ -19,11 +19,11 @@ Run each on the diff and the actions taken (commits, PRs, pushes, posts), not on
    A pass against a narrower bar (a rubric, a reviewer's score) is not Great: judge against the charter's words.
    A ready PR claims done; each box it closes needs its evidence first.
 3. **Rules.** Each line of the charter's Rules and of the repo's own rules (`CLAUDE.md`, `AGENTS.md`) against
-   the diff. A breach is a breach however good the work around it.
+   the diff.
 4. **Drift.** What was built against what was briefed. Scope that grew, shrank or swapped without a line saying
    so is drift, even when it is better.
-5. **Ask list.** Is someone below making a decision the charter's "Ask the user only for" keeps for the user?
-   An irreversible setting, money, a merge: it stops and goes up.
+5. **Ask list.** Is someone below making a decision on the charter's "Ask the user only for" list? It stops and
+   goes up.
 
 ## Improve
 
@@ -35,8 +35,9 @@ Run each on the diff and the actions taken (commits, PRs, pushes, posts), not on
 ## Output
 
 The guard sets the verdict: check 5 failed escalates, never corrects; else 1-4 failed corrects; else continue.
-A correction lists every failed check. The one improve line rides with any verdict. Each line quotes the charter
-line (or, for check 3, the repo rule) it rests on; nothing to quote, no correction.
+A correction lists every failed check. An improve line, when check 6 finds one, rides with any verdict. Each line
+quotes the charter line it rests on (check 3 may quote the repo rule, check 4 the brief); nothing to quote, no
+correction.
 
 ```
 continue

@@ -8,7 +8,8 @@ Spec: <link to the long spec, or none>. Owner: <owner session>. Evidence: <evide
 
 ## Great
 
-- <The bar beyond done, each line something a reviewer or critic can judge.>
+- <The bar beyond done, each line something a reviewer or critic can judge; link the references the critic
+  judges against (a screenshot, a voice sample, a page).>
 
 ## Done when
 
@@ -28,4 +29,4 @@ Spec: <link to the long spec, or none>. Owner: <owner session>. Evidence: <evide
 
 ## Changes
 
-- <YYYY-MM-DD>: created. <Dated; only the owner appends, the manager proposes.>
+- <YYYY-MM-DD>: created. <Only the owner appends; the manager proposes.>

@@ -13,8 +13,8 @@ result. You brief no worker and implement nothing: your context is for the user'
 Before any agent starts. Copy `charter.md` from this skill's folder to `<evidence folder>/charter.md` and settle
 each field with the user in a few lines.
 
-- **Goal** in the user's words, not yours. Your paraphrase is the first drift.
-- **Done when**: each box names its evidence. A box nobody can prove is a wish.
+- **Goal** in the user's words.
+- **Done when**: each box names its evidence.
 - **Ask the user only for**: the decisions that stay theirs. Everything else, you and the manager decide.
 
 One screen. Link the long spec; don't paste it. Only you append to Changes, dated.
@@ -40,8 +40,10 @@ Report to me (<owner session>) by SendMessage: DONE or BLOCKED with evidence per
 a decision from the Ask list, or a proposed Changes entry. Nothing else needs me.
 ```
 
-Subscribe with `SendMessage(notify_when_idle: true)` and wait with `superset agents wait --until settled`; never a
-screen poller.
+Keep the workspace ID and `terminals[0].terminalId` from its JSON. Subscribe with
+`SendMessage(to: <manager session>, notify_when_idle: true)`; block with `superset agents wait --local
+--workspace <id> --terminal <id> --until settled`; never a screen poller. A session in another permission mode
+holds the manager's messages for approval: run the owner in the manager's mode, or check each delivery notice.
 
 ## 3. While it runs
 
@@ -61,11 +63,11 @@ open and goes back to the manager.
 Done is:
 
 - **Tested PRs**: open, CI green, the repo's checks run with their real output in the PR body, reviewed to the
-  charter's Great. Unmerged unless the charter says otherwise.
+  charter's Great. The user merges; no agent can (a hook blocks `gh pr merge`).
 - **A demo artifact**: one page that shows the result as its user sees it, each Done-when box with its
   evidence, before and after. Publish it and link it.
 
 ## 5. Report and close
 
 To the user: the verdict, the PRs, the demo link, what is left with its issue numbers, and the decisions you need
-(the merge). Then close the manager.
+(the merge). Then close the manager: `superset terminals close --local --workspace <id> --terminal <id>`.
