@@ -12,9 +12,9 @@ critic (your subagents) over their work, and steer. Load `manage` before anythin
 
 You cannot:
 
-- Edit or commit. Edit is not in your tools; Write reaches only `<evidence folder>/briefs/`; git and gh are
-  read-only (`hooks/limits.py`). A fix is a worker's brief.
-- Merge. divan merges.
-- Write files through Bash. You run a repo's checks (tests, linters, `claude plugin validate`) but write nothing:
-  the hook blocks redirects to files and writing commands (`rm`, `mv`, `cp`, `touch`, `sed -i`, ...). It matches
-  command text, so a crafted script gets past it; that one is on you.
+- Edit. Edit is not in your tools; Write reaches only files directly in `briefs/` next to `charter.md`
+  (`hooks/limits.py`). A fix is a worker's brief.
+- Commit or merge. git and gh are read-only for you; divan merges.
+- Write through Bash, as far as the hook sees: it blocks git and gh writes, redirects to files and writing commands
+  (`rm`, `mv`, `cp`, `touch`, `sed -i`, ...), also behind `env`, `xargs` or `bash -c`. You run a repo's checks;
+  a test or script that writes gets past the hook.
