@@ -132,9 +132,12 @@ get separate directories instead of clobbering one checkout.
 ## Agents
 
 For the 3-layer setup: you (the owner, with `delegate` and `steer`) → a manager
-→ workers. Tools and `hooks/limits.py` enforce what the table lists, and
-[Gaps](#gaps) names what they don't. Workers and the manager run as Paradev sessions (`claude --agent
+→ workers. Workers and the manager run as Paradev sessions (`claude --agent
 divan:<name>`); the reviewer and critic are the manager's subagents.
+
+The hook, `hooks/limits.py`, stops a cooperative agent's mistakes, not an
+adversary: a crafted command gets past it. Each agent's tools and GitHub branch
+protection are the hard boundaries.
 
 Requirements:
 
@@ -147,39 +150,31 @@ Requirements:
   allowed, or `crossSessionInbound: accept`; otherwise Claude Code holds or
   refuses their messages. Check the delivery notice.
 
-| agent | does | can't | enforced by |
+| agent | does | tools | the hook blocks |
 |---|---|---|---|
-| manager | briefs workers, verifies, runs checks, steers | edit, commit, merge, fetch, write outside its `briefs/` | tools (no Edit); hook: Write only in the `briefs/` beside `charter.md`; git/gh writes and writing Bash commands blocked |
-| worker | one briefed task in its worktree | merge; push to `main` or `deploy`, without a remote and branch, or with options beyond the common ones; `add -A`, `commit -a`, `stash` (but `list`, `show`), `checkout .`, `reset --hard`, `clean -f` | hook |
-| reviewer | scores files with Codex, returns findings | change files; run Codex outside its read-only sandbox | tools; hook |
-| critic | judges what users see against the charter | edit, post, click, `curl` | tools (WebFetch, Slack read-only); hook: the browser only looks; screenshots only to the evidence folder or `$TMPDIR` |
+| manager | briefs workers, verifies, runs checks, steers | no Edit | Write outside the `briefs/` beside `charter.md`; the read-only rules |
+| worker | one briefed task in its worktree | all | `git push` naming `main` or `deploy`, `--all`, `--mirror`, or no branch |
+| reviewer | scores files with Codex, returns findings | no Edit or Write | Codex outside its read-only sandbox (`--yolo`, `-o`); the read-only rules |
+| critic | judges what users see against the charter | no Edit or Write; Slack read-only | `superset` beyond `browser list`, `open`, `navigate`, `screenshot`, `console`; the read-only rules |
 
-The hook also checks commands inside wrappers (`env`, `xargs`, `bash -c`, ...),
-and blocks unknown git global options, unknown options on wrappers and shells,
-and, for the manager, on `curl`. The exact rules are in `hooks/limits.py`.
+The read-only rules: git and gh writes (only read subcommands pass), `rm`, `mv`,
+`cp`, `touch`, `tee`, `mkdir`, `sed -i`, redirects to a file. For all four, the
+hook also blocks `gh pr merge` and the merge API.
 
-For every divan agent the hook blocks the merges it recognizes: `gh pr merge`,
-the merge API, GraphQL merge mutations. Your own session isn't limited, even
-when it spawns divan subagents. Any other subagent a divan agent spawns
-(general-purpose, Explore, ...) runs under that agent's limits; a reviewer or
-critic keeps its own.
+The hook acts only on `divan:` agents, and their limits follow the session. Your
+own session isn't limited, even when it spawns divan subagents. Any other
+subagent a divan agent spawns (general-purpose, Explore, ...) runs under that
+agent's limits; a reviewer or critic keeps its own.
 
 ### Gaps
 
-- The hook matches Bash as command text, so a command that writes through its
-  own syntax still gets past it: `sed`'s `w`, a test, a script, or a command
-  fed in as data (`echo cmd | xargs sh -c '{}'`).
-- Git config can still redirect: repo or environment config
-  (`remote.<name>.push`, `GIT_CONFIG_PARAMETERS` exported earlier) a worker's
-  push; a repo's `diff.external` or `textconv` a reader's `git diff` or
-  `log -p`.
-- Nothing confines a worker to its brief's files.
+- The same effect by another route gets past the hook, by design: a wrapper
+  (`bash -c`, `env`), a script, another writing program, git config.
+- Branch protection is the hard boundary for push and merge. Agents run on the
+  owner's GitHub credentials, so GitHub can't tell an agent merge from yours.
+  Require a PR and a review on `main` and `deploy`: that stops unreviewed
+  changes landing, but an approved PR can still be merged with your credentials.
 - Agents started by the Workflow tool are untested against these limits.
-- Agents run on the owner's GitHub credentials, so GitHub can't tell an agent
-  merge from yours: the hook is what stops it, and only the merges it
-  recognizes. Require a PR and a review on `main` and `deploy`: that stops
-  unreviewed changes landing, but an approved PR can still be merged with your
-  credentials.
 
 ## License
 
