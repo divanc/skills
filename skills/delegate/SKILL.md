@@ -64,7 +64,8 @@ whose evidence you have not seen stays open and goes back to the manager.
 Done is:
 
 - **Tested PRs**: open, CI green, the repo's checks run with their real output in the PR body, reviewed to the
-  charter's Great. The user merges; no divan agent can (a hook blocks it).
+  charter's Great. The user merges; a hook blocks the merge commands it recognizes for divan agents
+  ([Gaps](../../README.md#gaps)).
 - **A demo artifact**: one page that shows the result as its user sees it, each Done-when box with its
   evidence, before and after. Publish it and link it.
 
