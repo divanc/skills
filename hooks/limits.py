@@ -9,8 +9,8 @@ KEYWORDS = {"if", "then", "else", "elif", "while", "until", "do", "!", "{"}
 GIT_READ = {"status", "log", "diff", "show", "blame", "grep", "ls-files", "ls-tree", "cat-file", "rev-parse",
             "describe", "shortlog", "merge-base", "rev-list"}
 GH_READ = {"view", "list", "diff", "checks", "status", "watch"}
-BRANCH_READ = {"-a", "-r", "-v", "-vv", "-l", "--list", "--show-current", "--contains", "--no-contains", "--merged",
-               "--no-merged", "--points-at", "--sort", "--format"}  # the last six take an argument
+BRANCH_READ = {"-l", "--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort",
+               "--format", "-a", "-r", "-v", "-vv", "--show-current"}  # --contains to --format take an argument
 
 
 def api_writes(line):
@@ -37,7 +37,7 @@ def commands(cmd):
         out.append("".join(chars))
         delim = (re.findall(r"(?<!<)<<(?!<)-?\s*['\"]?(\w+)", line) or [None])[-1]
     lex = shlex.shlex(";".join(out), posix=True, punctuation_chars=True)
-    lex.whitespace_split = True
+    lex.whitespace_split, lex.commenters = True, ""  # comments are gone; shlex's own would eat joined lines
     try:
         toks = list(lex)
     except ValueError:  # unbalanced quotes: read it word by word
@@ -68,9 +68,10 @@ def why(agent, w):
                               or any(re.search(r"(^|[:/+])(main|deploy)$", a) for a in pos[1:])):
             return "workers never push to main or deploy; push your branch"
         return "name the destination: `git push origin <branch>`" if sub == "push" and len(pos) < 2 else None
-    filters = {"-l", "--list", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at"}
+    words = [a for i, a in enumerate(args[1:])  # branch operands, not the values of --contains ... --format
+             if not a.startswith("-") and args[i] not in BRANCH_READ - {"-l", "--list"}]
     reads = (sub == "branch" and {a.split("=")[0] for a in args[1:] if a.startswith("-")} <= BRANCH_READ
-             and (not pos or filters & {a.split("=")[0] for a in args[1:]})
+             and (not words or {"-l", "--list"} & set(args))
              or sub == "remote" and (args[1:] in ([], ["-v"]) or args[1:2] == ["get-url"])
              or sub == "config" and (args[1:2] in (["get"], ["list"])
                                      or {"--get", "--get-all", "--list", "-l", "--get-regexp"} & set(args)))
@@ -132,7 +133,8 @@ def test():
     assert W(f"{ev}/src/a.py") and W(f"{ev}/briefs/../a.py") and not W(f"{ev}/briefs/T1.md")
     blocked = {
         "manager": ["git commit -m x", "git push origin f", "gh pr create", "rm -rf x", "sed -i s/a/b/ f", "echo x > f",
-                    "if true; then rm x; fi", "# clean up\nrm -rf x", "ls # c\ngit commit -m x", "echo 'a #b' && rm x"],
+                    "if true; then rm x; fi", "curl https://x.com/#docs\nrm artifact", "# clean up\nrm -rf x",
+                    "ls # c\ngit commit -m x", "echo 'a #b' && rm x"],
         "worker": ["gh pr merge 1", "gh pr --repo o/r merge 1", "gh -R o/r pr merge 1",
                    "gh api -X PUT repos/o/r/pulls/1/merge", "git push origin main", "git push",
                    "# Publish\ngit push origin main", "gh api graphql -f query='mutation{mergePullRequest(x)}'",
@@ -140,7 +142,8 @@ def test():
         "reviewer": ["touch x", "git commit -m x", "cat <<EOF\nx\nEOF\ntouch y", "codex exec x",
                      "codex exec --yolo -s read-only x", "codex exec -s read-only -o f x"],
         "critic": ["superset browser eval 1", "touch x", "gh pr merge 1", "git branch new", "git branch -d x",
-                   "gh api --method GET x -X POST", "git log --output=f", "git diff --outp f", "git config user.name x",
+                   "gh api --method GET x -X POST", "git branch --sort x new",
+                   "git log --output=f", "git diff --outp f", "git config user.name x",
                    "git config --unset user.name", "git config set user.name x"]}
     allowed = {
         "manager": ["npm test", "python3 -m pytest -q", "claude plugin validate .", "superset agents wait",
@@ -154,7 +157,8 @@ def test():
                    "git branch --contains HEAD", "git branch --list 'feat/*'", "git branch --merged=main -v",
                    "gh api --method GET search/issues -f q=x", "gh pr --repo o/r view 1", "git log --oneline -3",
                    "git config --get user.name", "git config --show-origin --list", "git config get remote.origin.url",
-                   "git config -l", "git log --output-indicator-new=+ -1"]}
+                   "git config -l", "git log --output-indicator-new=+ -1", "git branch --sort committerdate",
+                   "git branch --format '%(refname:short)'", "git branch --contains HEAD -a", "git branch --merged"]}
     assert all(B("divan:" + a, c) for a, cs in blocked.items() for c in cs)
     assert not any(B("divan:" + a, c) for a, cs in allowed.items() for c in cs)
     assert not B("divan:worker", "git status", "s1") and B("general-purpose", "git push origin main", "s1", "a1")
