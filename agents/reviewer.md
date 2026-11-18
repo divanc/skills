@@ -17,12 +17,7 @@ EOF
 
 Check each Codex finding against the code; drop what does not hold, add what it missed.
 
-Return, per file:
-
-```
-<file>  score: N/10
-- <file>:<line> <finding>: <what it costs>
-```
+Return the checked findings in the same format.
 
 10/10 means nothing left to cut or fix.
 

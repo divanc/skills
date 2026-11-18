@@ -42,8 +42,20 @@ LONG_VALUES = {  # git long options that take the next word as their value
     "checkout": ("--orphan", "--conflict", "--pathspec-from-file"), "switch": ("--create", "--force-create", "--orphan"),
     "clean": ("--exclude",), "add": ("--chmod", "--pathspec-from-file"), "restore": ("--source", "--pathspec-from-file")}
 SWEEP_PATHS = {".", ":/", ":", "*", ":/*"}  # pathspecs that take the whole tree
-RUNS_OR_WRITES = {"rg": ("--pre",), "sort": ("--compress-program",), "file": ("-C", "--compile"),
-                  "date": ("-s", "--set")}  # options of read tools that run a program or change state
+READER_OPTS = {  # read tools: (short letters that take a value, long options that take the next word)
+    "sed": ("efl", ("--expression", "--file", "--line-length")),
+    "sort": ("ktoST", ("--key", "--field-separator", "--temporary-directory", "--buffer-size", "--parallel",
+                       "--files0-from", "--random-source", "--compress-program", "--batch-size", "--output")),
+    "tree": ("LPIoHT", ("--charset", "--filelimit", "--timefmt", "--sort")),
+    "uniq": ("fsw", ("--skip-fields", "--skip-chars", "--check-chars")),
+    "rg": ("efgtTABCmMjE", ("--regexp", "--file", "--glob", "--type", "--type-not", "--max-count", "--context",
+                            "--before-context", "--after-context", "--threads", "--encoding")),
+    "file": ("mefFP", ("--magic-file", "--exclude", "--separator", "--files-from", "--parameter")),
+    "date": ("dfrsI", ("--date", "--file", "--reference")),
+    "git grep": ("efABCmO", ("--max-depth", "--threads", "--max-count", "--context", "--before-context",
+                             "--after-context"))}
+RUNS_OR_WRITES = {"rg": ("", ("--pre",)), "sort": ("", ("--compress-program",)), "file": ("C", ("--compile",)),
+                  "date": ("s", ("--set",)), "git grep": ("O", ("--open-files-in-pager",))}  # run a program or change state
 GIT_READ = {"status", "log", "diff", "show", "rev-parse", "ls-files", "grep", "blame", "describe", "shortlog",
             "cat-file", "ls-tree", "merge-base", "rev-list", "worktree", "branch", "remote", "stash"}
 GH_READ = {"view", "list", "diff", "checks", "status", "watch"}
@@ -498,21 +510,22 @@ def codex_read_only(w):
 def reader(agent, w):
     """Why w writes, for the manager (denylist) and the reviewer and critic (allowlist)."""
     tool = w[0].rsplit("/", 1)[-1]
+    key = "git grep" if tool == "git" and git_args(w)[1][:1] == ["grep"] else tool
+    args = git_args(w)[1][1:] if key == "git grep" else w[1:]
+    short, longs, pos = split_args(args, *READER_OPTS.get(key, ("", ())))  # option values are not flags or operands
     if agent == "manager":
         if tool in WRITE:
             return f"`{tool}` writes files"
-        if tool == "sed" and ("i" in short_flags(w[1:], "efl", ("--expression", "--file", "--line-length"))
-                              or long_opt(w[1:], "--in-place")):
+        if tool == "sed" and ("i" in short or long_opt(longs, "--in-place")):
             return "sed -i edits files"
     elif tool not in READ | EXTRA[agent] | WRAP.keys():
         return f"`{tool}` is not on the {agent}'s read-only list"
-    if (tool in ("sort", "git") and long_opt(w, "--output")
-            or tool == "sort" and "o" in short_flags(w[1:], "ktoST") or tool == "tree" and "o" in short_flags(w[1:], "LPIo")
-            or tool == "uniq" and len([a for a in w[1:] if not a.startswith("-")]) > 1):
+    if (tool == "sort" and ("o" in short or long_opt(longs, "--output")) or tool == "git" and long_opt(w, "--output")
+            or tool == "tree" and "o" in short or tool == "uniq" and len(pos) > 1):
         return "an output file"
-    if any(long_opt(w[1:], o) if o.startswith("--") else any(a.startswith(o) for a in w[1:])
-           for o in RUNS_OR_WRITES.get(tool, ())):
-        return f"`{tool}` with an option that runs a program or changes state"
+    bad_short, bad_long = RUNS_OR_WRITES.get(key, ("", ()))
+    if set(bad_short) & short or bad_long and long_opt(longs, *bad_long):
+        return f"`{key}` with an option that runs a program or changes state"
     if tool == "find" and {"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"} & set(w):
         return "find with -delete, -exec or -fprint"
     if tool == "git":
@@ -520,8 +533,6 @@ def reader(agent, w):
         sub, rest = (a or [""])[0], a[1:]
         if any(o.startswith("-c") for o in opts):
             return "`git -c` can make git run any program"
-        if sub == "grep" and (any(r.startswith("-O") for r in rest) or long_opt(rest, "--open-files-in-pager")):
-            return "`git grep -O` runs a program"
         if (sub not in GIT_READ or sub == "worktree" and rest[:1] != ["list"]
                 or sub == "stash" and rest[:1] not in (["list"], ["show"])
                 or sub == "branch" and (any(f"-{c}" not in BRANCH_READ for c in short_flags(rest) - {"v"})
@@ -996,6 +1007,16 @@ def test():
               "git push origin feat-1"):
         assert not B("worker", c), c
     assert not B("manager", "jq '{a: .b}' f") and not B("manager", "{ ls; }") and B("manager", "{ rm x; }")
+    # Reader tools: clusters split, option values are neither flags nor operands
+    for a in ("manager", "reviewer", "critic"):
+        for c in ("git grep -lOvim pattern", "git grep -O pattern", "git grep --open pattern", "file -bC -m m", "date -us 1",
+                  "uniq in out", "uniq -c in out", "sort -ro out f", "sort -k1 --output out f", "tree -ao out"):
+            assert B(a, c), (a, c)
+        for c in ("uniq -f 1 input.txt", "uniq -s 2 input.txt", "uniq --skip-fields 1 input.txt", "git grep -e -O pattern",
+                  "git grep -l --max-depth 2 x", "date -d 1 +%s", "file -m magic f", "sort -t o f", "sort --key -o f",
+                  "rg -e --pre x f"):
+            assert not B(a, c), (a, c)
+    assert not B("manager", "sed -e --in-place f") and not B("manager", "sed --expression -i f") and B("manager", "sed -ni s/a/b/ f")
     here = os.getcwd()
     os.chdir(ev)  # relative paths would resolve inside the evidence folder; they block anyway
     for c in ("superset browser screenshot --out shot.png", "superset browser screenshot --out ./s.png",
