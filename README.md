@@ -145,7 +145,7 @@ Requirements:
 - Claude Code 2.1.295 or later, and `python3` 3.9 or later, for the hook. The
   hook fails closed: without `python3`, Bash, Write, Agent and Workflow calls
   are blocked in every session that loads the plugin.
-- Codex CLI 0.169 or later (`codex exec`, `codex review`), for the reviewer.
+- Codex CLI 0.169 or later (`codex exec`), for the reviewer.
 - Owner and manager in the same permission-mode class with inbound messages
   allowed, or `crossSessionInbound: accept`; otherwise Claude Code holds or
   refuses their messages. Check the delivery notice.
@@ -169,7 +169,8 @@ agent's limits; a reviewer or critic keeps its own.
 ### Gaps
 
 - The same effect by another route gets past the hook, by design: a wrapper
-  (`bash -c`, `env`), a script, another writing program, git config.
+  (`bash -c`, `env`), a script, another writing program, git config, a GraphQL
+  body read from a file.
 - Branch protection is the hard boundary for push and merge. Agents run on the
   owner's GitHub credentials, so GitHub can't tell an agent merge from yours.
   Require a PR and a review on `main` and `deploy`: that stops unreviewed
